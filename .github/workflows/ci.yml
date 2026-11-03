@@ -11,9 +11,11 @@ permissions:
 
 jobs:
   test:
-    name: PHP 8.3 · FOSSBilling integration
+    name: PHP 8.3 / FOSSBilling module tests
     runs-on: ubuntu-latest
     steps:
+      # These are TWO separate Git repositories. FOSSBilling is the test host;
+      # it is neither modified in this repo nor used as a submodule.
       - name: Check out MolliePayments
         uses: actions/checkout@v4
         with:
@@ -39,10 +41,20 @@ jobs:
       - name: Install MolliePayments SDK
         run: composer install --no-interaction --prefer-dist --no-progress --working-dir=molliepayments
 
+      - name: Verify Mollie SDK autoloads
+        run: |
+          php -r 'require "molliepayments/module/Molliepayments/vendor/autoload.php"; if (!class_exists("Mollie\\Api\\MollieApiClient")) { exit(1); }'
+
       - name: Install FOSSBilling dependencies
         run: composer install --no-interaction --prefer-dist --no-progress --working-dir=fossbilling
 
-      - name: Link the development integration
+      # FOSSBilling's tests/Pest.php bootstraps src/load.php, which needs a
+      # valid config.php even when every test uses mocks and no DB connection.
+      # We copy the upstream sample only in this disposable CI test checkout.
+      - name: Create disposable FOSSBilling test configuration
+        run: cp fossbilling/src/config-sample.php fossbilling/src/config.php
+
+      - name: Link MolliePayments into the FOSSBilling test host
         run: |
           ln -s "$GITHUB_WORKSPACE/molliepayments/gateway/MolliePayments.php" \
             "$GITHUB_WORKSPACE/fossbilling/src/library/Payment/Adapter/MolliePayments.php"
@@ -54,9 +66,13 @@ jobs:
           php -l molliepayments/gateway/MolliePayments.php
           php -l molliepayments/module/Molliepayments/Service.php
           php -l molliepayments/module/Molliepayments/Support/MollieClientFactory.php
+          php -l molliepayments/module/Molliepayments/tests/Unit/SdkTest.php
+          php -l molliepayments/module/Molliepayments/tests/Unit/SmokeTest.php
 
-      - name: Run MolliePayments tests through FOSSBilling
+      - name: Run MolliePayments tests with FOSSBilling's Pest framework
         working-directory: fossbilling
+        env:
+          APP_ENV: test
         run: |
           ./src/vendor/bin/pest \
             --test-directory=../tests \
