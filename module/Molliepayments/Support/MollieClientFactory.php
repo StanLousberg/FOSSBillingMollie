@@ -5,7 +5,6 @@ declare(strict_types=1);
 namespace Box\Mod\Molliepayments\Support;
 
 use Mollie\Api\MollieApiClient;
-use RuntimeException;
 
 final class MollieClientFactory
 {
@@ -18,9 +17,7 @@ final class MollieClientFactory
         $autoloader = dirname(__DIR__) . '/vendor/autoload.php';
 
         if (!is_file($autoloader)) {
-            throw new RuntimeException(
-                'Mollie SDK is not installed. Run composer install from the MolliePayments repository.'
-            );
+            throw new SdkUnavailableException('Mollie SDK is not installed. Run composer install from the MolliePayments repository.');
         }
 
         require_once $autoloader;

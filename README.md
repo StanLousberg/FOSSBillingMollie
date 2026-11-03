@@ -15,7 +15,7 @@
 </p>
 
 > [!IMPORTANT]
-> **Early development / not production-ready.** This repository currently contains a development scaffold and the official Mollie PHP SDK dependency. The payment adapter intentionally has both payment capabilities disabled; **you cannot collect payments with it yet**. Do not deploy it on a live billing installation.
+> **Early development / not production-ready.** This repository provides secure API credential configuration and read-only connection tests, alongside the development scaffold and official Mollie PHP SDK dependency. The payment adapter intentionally has both payment capabilities disabled; **you cannot collect payments with it yet**. Do not deploy it on a live billing installation.
 
 ## About
 
@@ -31,6 +31,8 @@ This is an **unofficial open-source project**. It is not affiliated with, sponso
 | --- | --- |
 | Gateway and module scaffold | Available |
 | Official Mollie PHP SDK v4 | Configured via Composer |
+| Separate encrypted Live and Test API keys | Available in gateway settings |
+| Read-only API connection tests | Available in the MolliePayments extension settings |
 | Development and unit-test integration | Available |
 | One-time Mollie Checkout | Planned |
 | Payment webhooks and invoice settlement | Planned |
@@ -92,6 +94,19 @@ The `--test-directory=../tests` flag is necessary because FOSSBilling installs P
 
 **Full setup, troubleshooting, deployment boundaries and dependency installation:** [Installation guide](docs/INSTALLATION.md).
 
+### Configure and test API credentials
+
+1. Install/activate the MolliePayments extension and add the MolliePayments gateway under **Payment Gateways**.
+2. In the [Mollie dashboard](https://my.mollie.com/), open **Developers → API keys** and obtain standard profile-scoped Test and Live API keys. See [Mollie's key guidance](https://help.mollie.com/hc/en-us/articles/360023732273-What-is-an-API-key). Advanced access tokens are outside this feature's scope.
+3. Open **Payment Gateways → MolliePayments**, enter **Live API Key** (`live_`) and/or **Test API Key** (`test_`), then save. Blank password fields preserve the saved value; entering a new value replaces only that credential. Stored keys are encrypted by FOSSBilling and never sent back to the browser.
+4. Open **Extensions → MolliePayments → Settings** (the settings icon). Click **Test connection**. The test uses only our MolliePayments adapter and selects its saved Test or Live key from the saved **Test mode** setting. Staff need MolliePayments module access, `molliepayments.manage_settings` and `invoice.manage_gateways`.
+
+The buttons use FOSSBilling's standard extension settings page. The payment adapter only contains the credential fields, labeled **Live API Key (live_xxx)** and **Test API Key (test_xxx)**. No core or theme changes, gateway scripts or separate connection-test route are needed. Save first: connection tests use the saved key, never unsaved input. Disabled gateways can be tested.
+
+The action calls `$client->payments->page(null, 1)` through the official SDK: [`GET https://api.mollie.com/v2/payments?limit=1`](https://docs.mollie.com/reference/list-payments). The adapter's saved **Test mode** setting selects the key; no `testmode` parameter is sent. An empty successful list counts as success. Payment details are discarded. The test does not change the saved mode or enabled state. It cannot target other adapters or override the environment from the browser.
+
+Success confirms authentication and permission to read payments at that moment. It does **not** prove that checkout, settlement, webhooks or recurring billing work. Payment capabilities remain disabled. See the [installation guide](docs/INSTALLATION.md) for compatibility requirements, setup and troubleshooting.
+
 ### Continuous integration
 
 On pushes and pull requests, GitHub Actions checks out **both** the MolliePayments repository and upstream FOSSBilling in separate directories. It installs each project's Composer dependencies, creates an isolated FOSSBilling test configuration (no production database), links the gateway and module into FOSSBilling, and runs the MolliePayments Pest tests through FOSSBilling's own test runner. The CI job does not perform real Mollie API requests or charge payments.
@@ -104,7 +119,12 @@ gateway/assets/mollie-icon.png          Gateway branding (served through the dir
 module/Molliepayments/                  FOSSBilling extension module
   manifest.json                         Extension metadata
   icon.svg                              Inline wrapper containing the original Mollie PNG
-  Service.php                           Module lifecycle service
+  Service.php                           Module lifecycle and saved gateway connection service
+  Api/Admin.php                         Permission-protected admin API
+  templates/admin/                      Native extension settings UI
+  Support/AdminTwigFactory.php          Module template fallback for symlinked installations
+  Support/ConnectionChecker.php         Read-only SDK request and sanitized feedback
+  Support/Credentials.php               Environment and credential validation
   Support/MollieClientFactory.php       Mollie SDK autoloading and client factory
   assets/mollie-icon.png                Round Mollie icon from Mollie's PrestaShop extension
   tests/Unit/                            Pest tests executed in FOSSBilling

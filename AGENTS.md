@@ -21,6 +21,17 @@ This document describes the repository's goals, constraints, architecture and wo
 5. Do not depend on modifications to FOSSBilling's installer, cron implementation, invoice internals or admin themes.
 6. Keep the module's public API minimal and consistent with FOSSBilling lifecycle/event conventions. Verify actual extension hooks against the FOSSBilling version being tested.
 
+## Credential and connection-test boundaries
+
+- Store Live and Test keys only through FOSSBilling's encrypted gateway secret fields. Preserve native blank-field updates and API masking; do not add a second credential store.
+- Resolve saved keys through `ServicePayGateway::getPaymentAdapter()`. Connection actions must require an admin identity and `invoice.manage_gateways`; normal module routing also requires MolliePayments module access.
+- Expose one **Test connection** action for our own MolliePayments adapter only. Resolve the gateway server-side and derive the environment from its saved `test_mode`; never accept browser-selected gateway IDs or environments. Do not silently choose between duplicate MolliePayments gateway instances.
+- Pass the resolved environment explicitly to the checker and use only that key for `payments->page(null, 1)`, without a `testmode` parameter. Discard payment data and sanitize every SDK error before it reaches host responses or logs.
+- Never call Mollie from the adapter constructor. The host validates enabled gateway configuration without callback URLs. Disabled gateway updates bypass that validation, so always validate again before connection testing.
+- Connection tests belong on the native extension settings page (`/extension/settings/molliepayments`), with `manage_settings` declared through module permissions. Keep the gateway UI limited to credentials; do not inject scripts or actions into core pages.
+- `Support/AdminTwigFactory.php` provides a module template fallback for symlinked installs. Preserve native theme precedence and test with real FOSSBilling Twig filters; never invent compatibility filters in test fixtures.
+- Current security contracts are required in addition to the manifest version range. See installation compatibility notes and keep the host integration tests protecting encrypted storage, blank updates and masked responses.
+
 ## Responsibilities
 
 - **FOSSBilling** owns invoices, orders, renewals, service state and the authoritative accounting outcome.
@@ -48,6 +59,12 @@ gateway/MolliePayments.php
 module/Molliepayments/manifest.json
 module/Molliepayments/Service.php
 module/Molliepayments/Support/MollieClientFactory.php
+module/Molliepayments/Support/Credentials.php
+module/Molliepayments/Support/ConnectionChecker.php
+module/Molliepayments/Support/SdkUnavailableException.php
+module/Molliepayments/Api/Admin.php
+module/Molliepayments/Support/AdminTwigFactory.php
+module/Molliepayments/templates/admin/mod_molliepayments_settings.html.twig
 module/Molliepayments/assets/mollie-icon.png
 module/Molliepayments/tests/Unit/
 composer.json
