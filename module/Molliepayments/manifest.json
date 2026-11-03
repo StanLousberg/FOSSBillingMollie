@@ -4,10 +4,14 @@
   "id": "molliepayments",
   "name": "MolliePayments",
   "version": "0.1.0",
-  "description": "Mollie payment integration for FOSSBilling (development scaffold)",
-  "author": {"name": "Stan Lousberg", "url": "https://stanlousberg.nl"},
-  "homepage_url": "https://github.com/StanLousberg/FOSSBillingMollie",
+  "description": "Community-maintained Mollie payment integration for FOSSBilling (development preview)",
+  "author": {
+    "name": "Stan Lousberg",
+    "url": "https://github.com/StanLousberg"
+  },
   "license": "Apache-2.0",
+  "homepage_url": "https://github.com/StanLousberg/FOSSBillingMollie",
+  "icon_url": "assets/mollie-logo.svg",
   "requires": {
     "fossbilling": ">=0.8.9",
     "php": ">=8.3",

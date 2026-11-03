@@ -8,7 +8,8 @@ final class Service
 {
     public function install(): bool
     {
-        // Later: eigen entiteiten en tabellen aanmaken.
+        // Reserved for module-owned Doctrine entities and tables.
+        // Never create or alter FOSSBilling core tables here.
         return true;
     }
 }
