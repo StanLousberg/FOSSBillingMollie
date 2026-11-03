@@ -1,6 +1,6 @@
 {
   "name": "stanlousberg/molliepayments",
-  "description": "Standalone Mollie integration for FOSSBilling",
+  "description": "Mollie Payments for FOSSBilling",
   "type": "project",
   "license": "Apache-2.0",
   "keywords": [

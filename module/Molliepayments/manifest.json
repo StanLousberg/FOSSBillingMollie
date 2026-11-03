@@ -4,7 +4,7 @@
   "id": "molliepayments",
   "name": "MolliePayments",
   "version": "0.1.0",
-  "description": "Standalone Mollie integration for FOSSBilling (development preview)",
+  "description": "Mollie Payments for FOSSBilling",
   "author": {
     "name": "Stan Lousberg",
     "url": "https://github.com/StanLousberg"
