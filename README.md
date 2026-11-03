@@ -1,11 +1,11 @@
 <p align="center">
-  <img src="module/Molliepayments/assets/mollie-logo.svg" alt="Mollie logo" width="220">
+  <img src="module/Molliepayments/assets/mollie-icon.png" alt="Mollie round icon" width="64" height="64">
 </p>
 
 <h1 align="center">MolliePayments</h1>
 
 <p align="center">
-  An independent, community-driven Mollie payment integration for FOSSBilling.
+  Standalone Mollie integration for FOSSBilling.
 </p>
 
 <p align="center">
@@ -23,7 +23,7 @@
 
 The integration consists of a FOSSBilling payment gateway adapter and a companion extension module. FOSSBilling remains responsible for invoices and order renewals; Mollie is the payment provider. The long-term goal is reliable, auditable processing of both one-off payments and invoice-driven recurring payments, including locally managed mandate metadata.
 
-This is an **unofficial community project**. It is not affiliated with, sponsored by or endorsed by Mollie B.V. or the FOSSBilling project. Mollie and its logo are trademarks of Mollie B.V. See [branding information](docs/BRANDING.md).
+This is an **unofficial open-source project**. It is not affiliated with, sponsored by or endorsed by Mollie B.V. or the FOSSBilling project. Mollie and its logo are trademarks of Mollie B.V. See [branding information](docs/BRANDING.md).
 
 ## Project status
 
@@ -89,6 +89,10 @@ The `--test-directory=../tests` flag is necessary because FOSSBilling installs P
 
 **Full setup, troubleshooting, deployment boundaries and dependency installation:** [Installation guide](docs/INSTALLATION.md).
 
+### Continuous integration
+
+On pushes and pull requests, GitHub Actions checks out **both** the MolliePayments repository and upstream FOSSBilling in separate directories. It installs each project's Composer dependencies, creates an isolated FOSSBilling test configuration (no production database), links the gateway and module into FOSSBilling, and runs the MolliePayments Pest tests through FOSSBilling's own test runner. The CI job does not perform real Mollie API requests or charge payments.
+
 ## Repository layout
 
 ```text
@@ -97,7 +101,7 @@ module/Molliepayments/                  FOSSBilling extension module
   manifest.json                         Extension metadata
   Service.php                           Module lifecycle service
   Support/MollieClientFactory.php       Mollie SDK autoloading and client factory
-  assets/mollie-logo.svg                Original Mollie wordmark
+  assets/mollie-icon.png                Round Mollie icon from Mollie's PrestaShop extension
   tests/Unit/                            Pest tests executed in FOSSBilling
 docs/INSTALLATION.md                    Development installation guide
 docs/BRANDING.md                        Logo attribution and trademark notice

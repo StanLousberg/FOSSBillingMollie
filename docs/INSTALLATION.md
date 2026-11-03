@@ -55,7 +55,7 @@ cd ~/dev/MolliePayments-workspace/FOSSBilling
 ddev exec bash -lc 'cd .local/MolliePayments && composer install --no-interaction'
 ```
 
-Do not run `composer require` in FOSSBilling's root project. The SDK must remain an independently managed dependency of MolliePayments.
+The dependency is **already declared** in the MolliePayments `composer.json` as `mollie/mollie-api-php: ^4.0`, so `composer install` is the correct command. `composer require mollie/mollie-api-php` is used when *adding* the requirement, not for installing an already declared dependency. Do not run `composer require` in FOSSBilling's root project. The SDK must remain an independently managed dependency of MolliePayments.
 
 ## 4. Link the gateway and module into FOSSBilling
 
@@ -118,6 +118,10 @@ ddev exec ./src/vendor/bin/pest \
 The `--test-directory=../tests` argument is mandatory in this project layout: Pest is installed in `src/vendor`, but its bootstrap and base test files are in the root `tests` directory.
 
 The SDK smoke test does not connect to Mollie or require an API key.
+
+### What CI tests
+
+The [GitHub Actions workflow](../.github/workflows/ci.yml) checks out **both** repositories separately, runs Composer for each, generates a disposable `fossbilling/src/config.php` from FOSSBilling's own sample, links the gateway/module and runs their Pest tests through the upstream FOSSBilling runner. The copied test config is created on the temporary GitHub Actions runner only and is not committed. This is a **unit/integration bootstrap**, not a fully installed billing instance or a live payment E2E environment.
 
 ## 7. Inspect the extension in FOSSBilling
 

@@ -48,7 +48,7 @@ gateway/MolliePayments.php
 module/Molliepayments/manifest.json
 module/Molliepayments/Service.php
 module/Molliepayments/Support/MollieClientFactory.php
-module/Molliepayments/assets/mollie-logo.svg
+module/Molliepayments/assets/mollie-icon.png
 module/Molliepayments/tests/Unit/
 composer.json
 docs/INSTALLATION.md
@@ -115,4 +115,4 @@ Never require real Mollie API credentials to run unit tests. Use mocked/faked SD
 
 ## Attribution and trademarks
 
-Mollie and the Mollie logo are trademarks of Mollie B.V. The logo is a separate brand asset, not licensed under Apache-2.0; preserve it unchanged. This is an unofficial integration. Read [BRANDING.md](docs/BRANDING.md).
+Mollie and the Mollie logo are trademarks of Mollie B.V. The round logo is an unmodified asset from Mollie's official PrestaShop extension, not licensed under Apache-2.0; preserve it unchanged. This is an unofficial integration. Read [BRANDING.md](docs/BRANDING.md).
