@@ -67,6 +67,9 @@ cd ~/dev/MolliePayments-workspace/FOSSBilling
 ln -s "$(pwd)/.local/MolliePayments/gateway/MolliePayments.php" \
   src/library/Payment/Adapter/MolliePayments.php
 
+ln -s "$(pwd)/.local/MolliePayments/gateway" \
+  src/library/Payment/Adapter/MolliePayments
+
 ln -s "$(pwd)/.local/MolliePayments/module/Molliepayments" \
   src/modules/Molliepayments
 ```
@@ -75,10 +78,15 @@ If those links already exist, skip this step. Check them with:
 
 ```bash
 ls -l src/library/Payment/Adapter/MolliePayments.php
+ls -ld src/library/Payment/Adapter/MolliePayments
 ls -l src/modules/Molliepayments
 ```
 
-The links are local development conveniences, **not changes to upstream FOSSBilling**. If your FOSSBilling checkout reports them as untracked, add their two paths to `.git/info/exclude` in the FOSSBilling checkout (not to FOSSBilling's tracked `.gitignore`).
+The links are local development conveniences, **not changes to upstream FOSSBilling**. If your FOSSBilling checkout reports them as untracked, add their three paths to `.git/info/exclude` in the FOSSBilling checkout (not to FOSSBilling's tracked `.gitignore`).
+
+The gateway directory link exposes all current and future gateway assets automatically; no per-asset links are needed. FOSSBilling discovers adapters through the separate PHP entry-point link. Existing workspaces with only the PHP and module links must add the gateway directory link once.
+
+The extension icon uses a root-level `icon.svg` wrapper containing the original PNG bytes. FOSSBilling inlines it through its module icon loader, so it also works when direct HTTP access to `/modules/` is blocked. The gateway uses `gateway/assets/mollie-icon.png` through the standard adapter logo configuration and directory link. No webserver exceptions or core changes are required.
 
 ## 5. Start the development host
 
@@ -166,4 +174,4 @@ Check `ddev exec php -v` and `ddev exec php -m`. Use DDEV's PHP environment inst
 
 **Existing checkout reports untracked links**
 
-Ignore only the two local paths using `.git/info/exclude`, not an upstream FOSSBilling commit.
+Ignore only the three local paths using `.git/info/exclude`, not an upstream FOSSBilling commit.

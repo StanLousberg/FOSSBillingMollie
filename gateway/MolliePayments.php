@@ -17,6 +17,11 @@ class Payment_Adapter_MolliePayments extends Payment_AdapterAbstract
             'supports_one_time_payments' => false,
             'supports_subscriptions' => false,
             'description' => 'MolliePayments development adapter. Payment processing is not implemented.',
+            'logo' => [
+                'logo' => 'MolliePayments/assets/mollie-icon.png',
+                'height' => '32px',
+                'width' => '32px',
+            ],
             'form' => [],
         ];
     }

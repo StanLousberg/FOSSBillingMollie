@@ -67,13 +67,16 @@ composer install
 cd ../..
 ln -s "$(pwd)/.local/MolliePayments/gateway/MolliePayments.php" \
   src/library/Payment/Adapter/MolliePayments.php
+ln -s "$(pwd)/.local/MolliePayments/gateway" \
+  src/library/Payment/Adapter/MolliePayments
+
 ln -s "$(pwd)/.local/MolliePayments/module/Molliepayments" \
   src/modules/Molliepayments
 
 ddev start
 ```
 
-> If you already have the workspace from the setup script, **do not clone it again**. Run `git pull` in `.local/MolliePayments`, then run `composer install` there. The existing development symlinks can be reused.
+> If you already have the workspace from the setup script, **do not clone it again**. Run `git pull` in `.local/MolliePayments`, then run `composer install` there. The existing development symlinks can be reused. If the gateway directory link is missing, add it once as shown above; it exposes all gateway assets automatically.
 
 Run the module tests with the FOSSBilling Pest runner:
 
@@ -97,8 +100,10 @@ On pushes and pull requests, GitHub Actions checks out **both** the MolliePaymen
 
 ```text
 gateway/MolliePayments.php              FOSSBilling payment adapter
+gateway/assets/mollie-icon.png          Gateway branding (served through the directory link)
 module/Molliepayments/                  FOSSBilling extension module
   manifest.json                         Extension metadata
+  icon.svg                              Inline wrapper containing the original Mollie PNG
   Service.php                           Module lifecycle service
   Support/MollieClientFactory.php       Mollie SDK autoloading and client factory
   assets/mollie-icon.png                Round Mollie icon from Mollie's PrestaShop extension

@@ -14,3 +14,32 @@ test('payment processing is intentionally disabled while in development', functi
     expect($config['supports_one_time_payments'])->toBeFalse();
     expect($config['supports_subscriptions'])->toBeFalse();
 });
+
+test('extension icon can be inlined without a public module asset request', function (): void {
+    $modulePath = dirname(__DIR__, 2);
+    $manifest = json_decode(file_get_contents($modulePath . '/manifest.json'), true, 512, JSON_THROW_ON_ERROR);
+    $loader = new FOSSBilling\Core\Twig\TwigLoader(
+        FOSSBilling\Core\Twig\AppArea::from('admin'),
+        PATH_THEMES . '/admin_default',
+    );
+    $source = $loader->getSourceContext('mod_Molliepayments_' . $manifest['icon_url'])->getCode();
+    $document = new DOMDocument();
+    expect($document->loadXML($source, LIBXML_NONET))->toBeTrue();
+    $image = $document->getElementsByTagName('image')->item(0);
+    $uri = $image->getAttributeNS('http://www.w3.org/1999/xlink', 'href');
+
+    expect($uri)->toStartWith('data:image/png;base64,')
+        ->and(base64_decode(substr($uri, strlen('data:image/png;base64,')), true))
+        ->toBe(file_get_contents($modulePath . '/assets/mollie-icon.png'));
+});
+
+test('gateway directory link exposes the original Mollie logo', function (): void {
+    $logo = Payment_Adapter_MolliePayments::getConfig()['logo'];
+    $path = PATH_LIBRARY . '/Payment/Adapter/' . $logo['logo'];
+
+    expect(is_file($path))->toBeTrue()
+        ->and(file_get_contents($path))
+        ->toBe(file_get_contents(dirname(__DIR__, 2) . '/assets/mollie-icon.png'))
+        ->and(getimagesize($path)[0])->toBe(32)
+        ->and(getimagesize($path)[1])->toBe(32);
+});

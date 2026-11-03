@@ -58,6 +58,8 @@ jobs:
         run: |
           ln -s "$GITHUB_WORKSPACE/molliepayments/gateway/MolliePayments.php" \
             "$GITHUB_WORKSPACE/fossbilling/src/library/Payment/Adapter/MolliePayments.php"
+          ln -s "$GITHUB_WORKSPACE/molliepayments/gateway" \
+            "$GITHUB_WORKSPACE/fossbilling/src/library/Payment/Adapter/MolliePayments"
           ln -s "$GITHUB_WORKSPACE/molliepayments/module/Molliepayments" \
             "$GITHUB_WORKSPACE/fossbilling/src/modules/Molliepayments"
 
