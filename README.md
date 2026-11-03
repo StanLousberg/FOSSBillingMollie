@@ -15,7 +15,7 @@
 </p>
 
 > [!IMPORTANT]
-> **Early development / not production-ready.** This repository provides secure API credential configuration and read-only connection tests, alongside the development scaffold and official Mollie PHP SDK dependency. The payment adapter intentionally has both payment capabilities disabled; **you cannot collect payments with it yet**. Do not deploy it on a live billing installation.
+> **Early development / not production-ready.** This repository implements one-time Mollie Checkout, authenticated webhooks and native invoice settlement, alongside encrypted credential configuration and connection tests. **Manual Mollie Test checkout and public-webhook validation remain required.** Do not deploy it on a live billing installation. Recurring payments remain disabled.
 
 ## About
 
@@ -34,13 +34,14 @@ This is an **unofficial open-source project**. It is not affiliated with, sponso
 | Separate encrypted Live and Test API keys | Available in gateway settings |
 | Read-only API connection tests | Available in the MolliePayments extension settings |
 | Development and unit-test integration | Available |
-| One-time Mollie Checkout | Planned |
-| Payment webhooks and invoice settlement | Planned |
+| One-time Mollie Checkout | Implemented for development validation |
+| Payment webhooks and invoice settlement | Implemented; manual Test-mode verification required |
 | Customers and mandate management | Planned |
 | Invoice-driven recurring payments | Planned |
-| Refunds, reconciliation and production release | Planned |
+| Verified payment reconciliation | Available through native transactions and CLI |
+| Refunds and production release | Planned |
 
-**A configured SDK is not a functional payment gateway.** Features marked planned are not implemented.
+**Not production-ready.** See [one-time payments, setup, recovery and manual testing](docs/PAYMENTS.md). Features marked planned are not implemented.
 
 ## Requirements
 
@@ -105,7 +106,7 @@ The buttons use FOSSBilling's standard extension settings page. The payment adap
 
 The action calls `$client->payments->page(null, 1)` through the official SDK: [`GET https://api.mollie.com/v2/payments?limit=1`](https://docs.mollie.com/reference/list-payments). The adapter's saved **Test mode** setting selects the key; no `testmode` parameter is sent. An empty successful list counts as success. Payment details are discarded. The test does not change the saved mode or enabled state. It cannot target other adapters or override the environment from the browser.
 
-Success confirms authentication and permission to read payments at that moment. It does **not** prove that checkout, settlement, webhooks or recurring billing work. Payment capabilities remain disabled. See the [installation guide](docs/INSTALLATION.md) for compatibility requirements, setup and troubleshooting.
+Success confirms authentication and permission to read payments at that moment. It does **not** prove that checkout, settlement, webhooks or recurring billing work. One-time checkout has separate automated and manual validation requirements. See the [installation guide](docs/INSTALLATION.md) for compatibility requirements, setup and troubleshooting.
 
 ### Continuous integration
 
@@ -119,7 +120,11 @@ gateway/assets/mollie-icon.png          Gateway branding (served through the dir
 module/Molliepayments/                  FOSSBilling extension module
   manifest.json                         Extension metadata
   icon.svg                              Inline wrapper containing the original Mollie PNG
-  Service.php                           Module lifecycle and saved gateway connection service
+  Service.php                           Module schema lifecycle and saved gateway connection service
+  PaymentService.php                    Checkout, verification and atomic native settlement
+  Entity/MolliePaymentAttempt.php        Module-owned payment identity and audit record
+  Repository/AttemptRepository.php       DBAL reservation, uniqueness and checkout leases
+  bin/                                  CLI migration, inspection and reconciliation
   Api/Admin.php                         Permission-protected admin API
   templates/admin/                      Native extension settings UI
   Support/AdminTwigFactory.php          Module template fallback for symlinked installations
@@ -129,6 +134,7 @@ module/Molliepayments/                  FOSSBilling extension module
   assets/mollie-icon.png                Round Mollie icon from Mollie's PrestaShop extension
   tests/Unit/                            Pest tests executed in FOSSBilling
 docs/INSTALLATION.md                    Development installation guide
+docs/PAYMENTS.md                        One-time payment flow, recovery and manual E2E test
 docs/BRANDING.md                        Logo attribution and trademark notice
 AGENTS.md                               Architecture and AI-agent instructions
 CONTRIBUTING.md                         Contribution workflow and standards
@@ -146,7 +152,7 @@ The GitHub repository is called `FOSSBillingMollie`; **MolliePayments** is the p
 - **Be idempotent.** Repeated checkouts, cron runs and webhook deliveries must not create duplicate charges or invoice payments.
 - **Recurring payments follow invoices.** Mandates may authorize future payments, but a valid mandate is not itself a paid invoice or a Mollie Subscription object.
 - **Keep credentials secure.** Never commit API keys, customer bank details, webhook secrets or production data.
-- **Test before enabling payments.** Keep the adapter flags disabled until the complete flow has adequate automated and live-test coverage.
+- **Test before enabling payments.** One-time capability is available for development testing. Require automated and manual Test-mode E2E evidence before production use; subscriptions remain disabled.
 
 ## Contributing
 

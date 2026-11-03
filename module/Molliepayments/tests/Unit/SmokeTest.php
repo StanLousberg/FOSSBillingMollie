@@ -8,10 +8,10 @@ test('MolliePayments gateway class loads', function (): void {
     expect(class_exists(Payment_Adapter_MolliePayments::class))->toBeTrue();
 });
 
-test('payment processing is intentionally disabled while in development', function (): void {
+test('one-time checkout is supported and recurring payments remain disabled', function (): void {
     $config = Payment_Adapter_MolliePayments::getConfig();
 
-    expect($config['supports_one_time_payments'])->toBeFalse();
+    expect($config['supports_one_time_payments'])->toBeTrue();
     expect($config['supports_subscriptions'])->toBeFalse();
 });
 

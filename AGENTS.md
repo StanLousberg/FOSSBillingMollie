@@ -9,7 +9,7 @@ This document describes the repository's goals, constraints, architecture and wo
 - **Target platform:** FOSSBilling (PHP 8.3+, Doctrine ORM/DBAL, Pest).
 - **Provider:** Mollie, accessed through the official `mollie/mollie-api-php` SDK, presently constrained to `^4.0`.
 - **Project type:** independent gateway adapter plus a companion FOSSBilling extension module.
-- **Status:** development scaffold; payment processing is **not implemented** and must remain disabled until properly tested.
+- **Status:** one-time checkout and native invoice settlement implemented for development validation; **not production-ready**. Manual Mollie Test checkout/public-webhook evidence is required before production use. Recurring payments remain disabled.
 - **Language:** English for documentation, code comments, commit messages and UI copy unless a task explicitly requests translations.
 
 ## Non-negotiable architecture boundaries
@@ -50,7 +50,13 @@ This document describes the repository's goals, constraints, architecture and wo
 - Handle pending, failed, expired, refunded and charged-back states, including async settlement timing.
 - Secrets belong in secure runtime settings; never in source, test fixtures, logs, screenshots or GitHub issues.
 - Maintain a strict **test-mode vs live-mode** boundary.
-- Do not enable `supports_one_time_payments` or `supports_subscriptions` in the adapter until the corresponding end-to-end flows work and tests protect them.
+- `supports_one_time_payments` is enabled for development validation, protected by mocked-provider/native-accounting tests. Keep `supports_subscriptions` false. Do not claim production readiness without real Mollie Test-mode E2E evidence.
+- A committed unique active-invoice reservation precedes any provider creation request. Preserve exact payload/idempotency identity across retries; never replay unresolved creation after 45 minutes or with a rotated credential.
+- Only authenticated `paid` with a paid timestamp settles. Invoice locking, native transaction claims and the attempt settlement guard jointly protect accounting; never re-claim a transaction inside the adapter.
+- Commit the verified credit, native invoice debit/paid state, transaction history and attempt guard atomically. Dispatch payment events after commit; native cron executes pending item tasks.
+- Charged items reduce outstanding amounts. Unallocated wallet credits are not reserved by checkout; ambiguous partial transactions, currency mismatches, non-two-decimal currencies and Add Funds invoices fail closed.
+- Preserve attempts on upgrades/removal. Schema installation/update uses `SchemaSynchronizer::syncEntities()` for module entities only; no core migrations or destructive schema sync.
+- CLI recovery must use the same native claimed transaction/verification path. Never clear an unresolved active slot simply to unblock a checkout.
 
 ## Source layout
 
@@ -58,6 +64,11 @@ This document describes the repository's goals, constraints, architecture and wo
 gateway/MolliePayments.php
 module/Molliepayments/manifest.json
 module/Molliepayments/Service.php
+module/Molliepayments/PaymentService.php
+module/Molliepayments/Entity/MolliePaymentAttempt.php
+module/Molliepayments/Repository/AttemptRepository.php
+module/Molliepayments/Support/Amount.php
+module/Molliepayments/bin/
 module/Molliepayments/Support/MollieClientFactory.php
 module/Molliepayments/Support/Credentials.php
 module/Molliepayments/Support/ConnectionChecker.php
@@ -69,6 +80,7 @@ module/Molliepayments/assets/mollie-icon.png
 module/Molliepayments/tests/Unit/
 composer.json
 docs/INSTALLATION.md
+docs/PAYMENTS.md
 docs/BRANDING.md
 README.md
 CONTRIBUTING.md

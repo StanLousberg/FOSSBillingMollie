@@ -1,6 +1,6 @@
 # Installation and development setup
 
-> **Development only.** MolliePayments does not yet process real or test payments. Its payment adapter deliberately reports that one-time and subscription payments are unsupported. This guide installs credential configuration, read-only API connection tests, the development scaffold and official SDK. It does not install a production payment solution.
+> **Development only.** MolliePayments implements one-time Checkout and authenticated invoice settlement for development validation. Subscriptions remain unsupported. Complete the [manual Test-mode payment and webhook procedure](PAYMENTS.md) before considering deployment; there is no production-ready release.
 
 ## 1. Prerequisites
 
@@ -44,7 +44,7 @@ This installs the official `mollie/mollie-api-php` SDK v4 and its dependencies i
 module/Molliepayments/vendor/
 ```
 
-That directory is deliberately ignored by Git. The class `Box\Mod\Molliepayments\Support\MollieClientFactory` loads its Composer autoloader when needed and provides a configured Mollie API client to future integration code.
+That directory is deliberately ignored by Git. The class `Box\Mod\Molliepayments\Support\MollieClientFactory` loads its Composer autoloader when needed and provides configured clients to connection tests, checkout and reconciliation.
 
 **No Composer lock file exists in the initial scaffold.** Composer will resolve and generate one on the first install. Contributors should commit the resulting `composer.lock` in a subsequent dependency-lock change to make future installations deterministic.
 
@@ -135,7 +135,7 @@ The [GitHub Actions workflow](../.github/workflows/ci.yml) checks out **both** r
 
 After DDEV starts, open the administration interface. FOSSBilling should discover the `MolliePayments` gateway from its `src/library/Payment/Adapter` path, and `Molliepayments` from `src/modules`.
 
-You may install/activate the development extension to verify discovery, but **do not enable or attempt live payments**. The adapter currently throws a deliberate not-implemented error.
+Install/activate the development extension, then follow [one-time payment setup](PAYMENTS.md). Existing module installations must run its additive migration. Use only disposable Test-mode payments during validation; do not enable Live payments.
 
 ## 8. Configure and test Mollie API credentials
 
@@ -149,7 +149,7 @@ Obtain standard profile-scoped API keys from **Developers → API keys** in the 
 
 Activate the companion extension under **Extensions**, add the gateway under **Payment Gateways**, and open **MolliePayments**. Enter either or both password fields and save. Native FOSSBilling encryption protects the saved values; admin responses expose only whether each key is configured. Leave a password blank to keep its previous value. To rotate a credential, enter its replacement and save; the other key remains unchanged. Blank fields do not delete keys.
 
-**Test mode** selects the active credential for future operations: checked selects Test, unchecked selects Live. Required fields follow the active environment when the gateway is enabled. Payment processing is still unsupported regardless of this flag. Leave the gateway disabled while configuring and testing.
+**Test mode** selects the active credential for future operations: checked selects Test, unchecked selects Live. Required fields follow the active environment when the gateway is enabled. Leave the gateway disabled while configuring credentials. After schema installation and a successful connection test, enable one-time payments in Test mode as described in [PAYMENTS.md](PAYMENTS.md).
 
 FOSSBilling only invokes adapter configuration validation when saving an enabled gateway. A disabled gateway can therefore store an invalid value, but MolliePayments always rejects missing, malformed or wrong-environment keys before a connection request. Prefix validation also runs before enabling. Saving does not contact Mollie and does not require checkout callback URLs.
 
@@ -163,7 +163,7 @@ The native template finder does not descend into symlinked module directories. M
 
 The request is the SDK v4 `$client->payments->page(null, 1)`: [List Payments](https://docs.mollie.com/reference/list-payments), `GET https://api.mollie.com/v2/payments?limit=1`. No `testmode` parameter is sent for profile API keys. No payment is created. Any payment details returned by Mollie are discarded, never included in the result or logged. A successful empty collection is a successful connection.
 
-A success only proves that the selected saved key authenticated and could read payments at that moment. It does not validate payment creation, checkout, accounting, webhooks, settlement, refunds, subscriptions or mandates. Both adapter payment capability flags remain false. Automated tests use the SDK's fake transport and generated disposable dummy values, without real credentials or network access.
+A success only proves that the selected saved key authenticated and could read payments at that moment. It does not validate payment creation, checkout, accounting, webhooks, settlement, refunds, subscriptions or mandates. One-time capability is enabled for development validation; subscription capability remains false. Automated tests use the SDK's fake transport and generated disposable dummy values, without real credentials or network access.
 
 ## 9. Develop and submit changes
 
@@ -180,7 +180,7 @@ See [CONTRIBUTING.md](../CONTRIBUTING.md) for the pull-request workflow and requ
 
 ## Production deployment
 
-There is **no supported production installation at this stage**. Before publishing a deployable release, we must build a release artifact that contains the gateway, companion module and production Composer dependencies, install both in their FOSSBilling locations, and confirm payment/webhook/recurring flows in a staging environment. This guide will be expanded when those features are implemented.
+There is **no supported production installation at this stage**. Before publishing a deployable release, we must build a release artifact that contains the gateway, companion module and production Composer dependencies, install both in their FOSSBilling locations, and confirm the implemented one-time checkout and webhook flow in a staging environment. Recurring flows are not implemented and are outside this release. This guide will be expanded when those features are implemented.
 
 ## Troubleshooting
 

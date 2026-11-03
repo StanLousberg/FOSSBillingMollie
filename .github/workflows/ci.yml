@@ -32,7 +32,7 @@ jobs:
         with:
           php-version: '8.3'
           tools: composer:v2
-          extensions: curl, intl, mbstring, openssl, pdo_sqlite, zip, dom, xml
+          extensions: curl, intl, mbstring, openssl, pcntl, pdo_sqlite, zip, dom, xml
           coverage: none
 
       - name: Validate MolliePayments Composer metadata
@@ -65,20 +65,10 @@ jobs:
 
       - name: Check PHP syntax
         run: |
-          php -l molliepayments/gateway/MolliePayments.php
-          php -l molliepayments/module/Molliepayments/Service.php
-          php -l molliepayments/module/Molliepayments/Support/MollieClientFactory.php
-          php -l molliepayments/module/Molliepayments/tests/Unit/SdkTest.php
-          php -l molliepayments/module/Molliepayments/tests/Unit/SmokeTest.php
-          php -l molliepayments/module/Molliepayments/Support/Credentials.php
-          php -l molliepayments/module/Molliepayments/Support/ConnectionChecker.php
-          php -l molliepayments/module/Molliepayments/Support/SdkUnavailableException.php
-          php -l molliepayments/module/Molliepayments/Api/Admin.php
-          php -l molliepayments/module/Molliepayments/Support/AdminTwigFactory.php
-          php -l molliepayments/module/Molliepayments/tests/Unit/CredentialsTest.php
-          php -l molliepayments/module/Molliepayments/tests/Unit/ConnectionTest.php
-          php -l molliepayments/module/Molliepayments/tests/Unit/AdminTest.php
-          php -l molliepayments/module/Molliepayments/tests/Support.php
+          find molliepayments/gateway molliepayments/module -path '*/vendor' -prune -o -name '*.php' -print0 | xargs -0 -n 1 php -l
+
+      - name: Check MolliePayments PHP style
+        run: fossbilling/src/vendor/bin/php-cs-fixer fix --config=molliepayments/.php-cs-fixer.php --dry-run --diff --sequential
 
       - name: Run MolliePayments tests with FOSSBilling's Pest framework
         working-directory: fossbilling
