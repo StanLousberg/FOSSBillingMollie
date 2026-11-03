@@ -1,0 +1,16 @@
+{
+  "manifest_version": 1,
+  "type": "module",
+  "id": "molliepayments",
+  "name": "MolliePayments",
+  "version": "0.1.0",
+  "description": "Mollie payment integration for FOSSBilling (development scaffold)",
+  "author": {"name": "Stan Lousberg", "url": "https://stanlousberg.nl"},
+  "homepage_url": "https://github.com/StanLousberg/FOSSBillingMollie",
+  "license": "Apache-2.0",
+  "requires": {
+    "fossbilling": ">=0.8.9",
+    "php": ">=8.3",
+    "modules": {}
+  }
+}
