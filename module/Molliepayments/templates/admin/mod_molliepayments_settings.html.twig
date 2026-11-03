@@ -1,0 +1,58 @@
+{% extends request.ajax ? 'layout_blank.html.twig' : 'layout_default.html.twig' %}
+{% set active_menu = 'system' %}
+{% block meta_title %}{{ 'MolliePayments settings'|trans }}{% endblock %}
+
+{% block content %}
+<div class="card">
+    <div class="card-header">
+        <h3 class="card-title">{{ 'MolliePayments settings'|trans }}</h3>
+    </div>
+    <div class="card-body">
+        <p>{{ 'Tests the saved API key for the MolliePayments adapter. Its saved Test mode setting determines whether the Test or Live key is used.'|trans }}</p>
+        <form id="mollie-connection-test" action="{{ 'molliepayments/connection_test'|api_url }}" method="post">
+            <input type="hidden" name="CSRFToken" value="{{ CSRFToken }}">
+            <button class="btn btn-primary" type="submit">{{ 'Test connection'|trans }}</button>
+            <p class="mt-2 mb-0" role="status" aria-live="polite" data-connection-result></p>
+        </form>
+    </div>
+</div>
+{% endblock %}
+
+{% block js %}
+{{ parent() }}
+<script>
+(() => {
+    const form = document.getElementById('mollie-connection-test');
+    form.addEventListener('submit', async (event) => {
+        event.preventDefault();
+        if (form.dataset.busy === 'true') return;
+        const result = form.querySelector('[data-connection-result]');
+        const button = form.querySelector('button');
+        form.dataset.busy = 'true';
+        button.disabled = true;
+        result.className = 'mt-2 mb-0';
+        result.textContent = {{ 'Testing connection…'|trans|json_encode|raw }};
+        try {
+            const response = await fetch(form.action, { method: 'POST', body: new FormData(form), credentials: 'same-origin' });
+            const data = await response.json();
+            if (data.error?.message) {
+                result.classList.add('text-danger');
+                result.textContent = data.error.message;
+            } else {
+                if (!response.ok || !data.result) throw new Error('request failed');
+                const outcome = data.result;
+                result.classList.add(outcome.success ? 'text-success' : 'text-danger');
+                const mode = outcome.environment === 'test' ? 'Test' : 'Live';
+                result.textContent = mode + ': ' + outcome.message;
+            }
+        } catch (error) {
+            result.classList.add('text-danger');
+            result.textContent = {{ 'The test request failed. Check your session and gateway permissions, then try again.'|trans|json_encode|raw }};
+        } finally {
+            form.dataset.busy = 'false';
+            button.disabled = false;
+        }
+    });
+})();
+</script>
+{% endblock %}

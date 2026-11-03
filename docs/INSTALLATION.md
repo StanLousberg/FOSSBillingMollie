@@ -1,6 +1,6 @@
 # Installation and development setup
 
-> **Development only.** MolliePayments does not yet process real or test payments. Its payment adapter deliberately reports that one-time and subscription payments are unsupported. This guide installs the development scaffold and official SDK, not a production payment solution.
+> **Development only.** MolliePayments does not yet process real or test payments. Its payment adapter deliberately reports that one-time and subscription payments are unsupported. This guide installs credential configuration, read-only API connection tests, the development scaffold and official SDK. It does not install a production payment solution.
 
 ## 1. Prerequisites
 
@@ -137,7 +137,35 @@ After DDEV starts, open the administration interface. FOSSBilling should discove
 
 You may install/activate the development extension to verify discovery, but **do not enable or attempt live payments**. The adapter currently throws a deliberate not-implemented error.
 
-## 8. Develop and submit changes
+## 8. Configure and test Mollie API credentials
+
+### Compatible FOSSBilling host
+
+This feature relies on the current FOSSBilling gateway contract: `secret` fields, `required_when`, encrypted `SecretConfig` storage, masking through `ServicePayGateway::toApiArray()`, preservation of blank secret updates and decrypted `getPaymentAdapter()`. It was tested against host commit `97bb583dd681e311e2d10fe8c648095f2a479878`. The manifest's `>=0.8.9` constraint alone does not guarantee an older build has these security features. Verify the contract before deployment; hosts without it are unsupported. Never patch core or fall back to plaintext storage. CI tests these behaviors against its upstream checkout.
+
+### Obtain, save and rotate credentials
+
+Obtain standard profile-scoped API keys from **Developers → API keys** in the [Mollie dashboard](https://my.mollie.com/). Keep Test (`test_`) and Live (`live_`) keys separate; do not paste advanced access tokens. Consult [Mollie's API key guidance](https://help.mollie.com/hc/en-us/articles/360023732273-What-is-an-API-key).
+
+Activate the companion extension under **Extensions**, add the gateway under **Payment Gateways**, and open **MolliePayments**. Enter either or both password fields and save. Native FOSSBilling encryption protects the saved values; admin responses expose only whether each key is configured. Leave a password blank to keep its previous value. To rotate a credential, enter its replacement and save; the other key remains unchanged. Blank fields do not delete keys.
+
+**Test mode** selects the active credential for future operations: checked selects Test, unchecked selects Live. Required fields follow the active environment when the gateway is enabled. Payment processing is still unsupported regardless of this flag. Leave the gateway disabled while configuring and testing.
+
+FOSSBilling only invokes adapter configuration validation when saving an enabled gateway. A disabled gateway can therefore store an invalid value, but MolliePayments always rejects missing, malformed or wrong-environment keys before a connection request. Prefix validation also runs before enabling. Saving does not contact Mollie and does not require checkout callback URLs.
+
+### Run the connection tests
+
+Open **Extensions → MolliePayments → Settings** using the extension's settings icon. The page contains one **Test connection** button, exclusively for our MolliePayments adapter. It does not list or select other adapters. The adapter's saved **Test mode** flag selects its saved Test key when checked and Live key when unchecked. **Save changes before testing**: these actions load stored credentials server-side, not unsaved password inputs. A disabled gateway can be tested, and the action leaves the saved mode and enabled state unchanged. The browser cannot supply a different gateway ID or environment. If there is no MolliePayments gateway, or multiple copies make the target ambiguous, the test stops with a clear message instead of choosing one arbitrarily.
+
+The settings page uses FOSSBilling's native `/extension/settings/molliepayments` route, module settings permission check, layout, admin API and CSRF token. Staff require MolliePayments module access, `molliepayments.manage_settings` and `invoice.manage_gateways`. The adapter only renders **Live API Key (live_xxx)** and **Test API Key (test_xxx)**; it has no test buttons or custom descriptions beneath those fields. There is no standalone module page or JavaScript injected into gateway settings.
+
+The native template finder does not descend into symlinked module directories. MolliePayments therefore decorates the admin Twig factory with a fallback for its own templates during module service initialization. The standard theme and its overrides retain priority. This supports the native extension settings route without changing core files, theme files, webserver configuration or adding per-file symlinks. The settings template uses the host's supported `url` and `api_url` filters.
+
+The request is the SDK v4 `$client->payments->page(null, 1)`: [List Payments](https://docs.mollie.com/reference/list-payments), `GET https://api.mollie.com/v2/payments?limit=1`. No `testmode` parameter is sent for profile API keys. No payment is created. Any payment details returned by Mollie are discarded, never included in the result or logged. A successful empty collection is a successful connection.
+
+A success only proves that the selected saved key authenticated and could read payments at that moment. It does not validate payment creation, checkout, accounting, webhooks, settlement, refunds, subscriptions or mandates. Both adapter payment capability flags remain false. Automated tests use the SDK's fake transport and generated disposable dummy values, without real credentials or network access.
+
+## 9. Develop and submit changes
 
 Open only the MolliePayments checkout in VS Code:
 
@@ -175,3 +203,19 @@ Check `ddev exec php -v` and `ddev exec php -m`. Use DDEV's PHP environment inst
 **Existing checkout reports untracked links**
 
 Ignore only the three local paths using `.git/info/exclude`, not an upstream FOSSBilling commit.
+
+**Missing or invalid API key / authentication failure**
+
+Save the appropriate key before testing. Check the `test_` or `live_` prefix, remove whitespace and confirm the key has not been revoked. Replace it in the password field and save. The SDK may apply additional key validity checks. Do not paste credentials into issue reports.
+
+**Insufficient permissions**
+
+Use a standard profile API key that can read payments. Check staff access to MolliePayments, `molliepayments.manage_settings` and `invoice.manage_gateways`. Make sure the extension is activated, and sign in again if your session expired.
+
+**Timeout or connection failure**
+
+Ensure PHP can reach `api.mollie.com` over HTTPS with working DNS, trusted CA certificates and cURL/OpenSSL. Check your firewall/proxy. Never disable TLS verification to work around errors. The UI shows sanitized errors; it does not expose provider response bodies.
+
+**Rate limit or temporarily unavailable**
+
+Wait before retrying. A failed test does not change the stored key or gateway mode. Avoid repeated clicks while a request is in progress.
