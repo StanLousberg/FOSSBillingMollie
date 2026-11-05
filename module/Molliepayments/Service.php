@@ -33,9 +33,7 @@ final class Service implements InjectionAwareInterface
 
     public function install(): bool
     {
-        if (!class_exists(\FOSSBilling\Core\Doctrine\SchemaSynchronizer::class)) {
-            throw new InformationException('This host does not support module-scoped Doctrine schema synchronization.', [], 409);
-        }
+        Support\Compatibility::assertHost();
         \FOSSBilling\Core\Doctrine\SchemaSynchronizer::syncEntities($this->di['em'], [Entity\MolliePaymentAttempt::class]);
 
         return true;

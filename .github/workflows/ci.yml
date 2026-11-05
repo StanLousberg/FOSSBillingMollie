@@ -11,7 +11,24 @@ permissions:
 
 jobs:
   test:
-    name: PHP 8.3 / FOSSBilling module tests
+    name: PHP 8.3 / ${{ matrix.database }} / ${{ matrix.host }}
+    strategy:
+      matrix:
+        database: [sqlite, mariadb]
+        host: [97bb583dd681e311e2d10fe8c648095f2a479878, main]
+    services:
+      mariadb:
+        image: mariadb:11.8
+        env:
+          MARIADB_ROOT_PASSWORD: test-only-password
+          MARIADB_DATABASE: molliepayments_test
+        ports:
+          - 3306:3306
+        options: >-
+          --health-cmd="healthcheck.sh --connect --innodb_initialized"
+          --health-interval=10s
+          --health-timeout=5s
+          --health-retries=10
     runs-on: ubuntu-latest
     steps:
       # These are TWO separate Git repositories. FOSSBilling is the test host;
@@ -25,6 +42,7 @@ jobs:
         uses: actions/checkout@v4
         with:
           repository: FOSSBilling/FOSSBilling
+          ref: ${{ matrix.host }}
           path: fossbilling
 
       - name: Set up PHP
@@ -32,11 +50,11 @@ jobs:
         with:
           php-version: '8.3'
           tools: composer:v2
-          extensions: curl, intl, mbstring, openssl, pcntl, pdo_sqlite, zip, dom, xml
+          extensions: curl, intl, mbstring, openssl, pcntl, pdo_mysql, pdo_sqlite, zip, dom, xml
           coverage: none
 
       - name: Validate MolliePayments Composer metadata
-        run: composer validate --no-check-publish --no-check-lock --working-dir=molliepayments
+        run: composer validate --strict --no-check-publish --working-dir=molliepayments
 
       - name: Install MolliePayments SDK
         run: composer install --no-interaction --prefer-dist --no-progress --working-dir=molliepayments
@@ -79,3 +97,15 @@ jobs:
             --test-directory=../tests \
             --configuration=phpunit.xml.dist \
             src/modules/Molliepayments/tests/Unit
+
+      - name: Run independent-worker MariaDB integration tests
+        if: matrix.database == 'mariadb'
+        working-directory: fossbilling
+        env:
+          APP_ENV: test
+          MOLLIEPAYMENTS_MYSQL_URL: mysql://root:test-only-password@127.0.0.1:3306/molliepayments_test
+        run: |
+          ./src/vendor/bin/pest \
+            --test-directory=../tests \
+            --configuration=phpunit.xml.dist \
+            src/modules/Molliepayments/tests/Integration

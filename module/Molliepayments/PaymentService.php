@@ -29,6 +29,7 @@ final class PaymentService
     /** @param \Closure(string): MollieApiClient|null $clientFactory */
     public function __construct(private readonly \Pimple\Container $di, private readonly ?\Closure $clientFactory = null)
     {
+        Support\Compatibility::assertHost();
         $this->attempts = new AttemptRepository($di['em']->getConnection());
     }
 
@@ -42,7 +43,7 @@ final class PaymentService
 
         return (int) $this->di['mod_service']('Invoice', 'Transaction')->createAndProcess([
             'invoice_id' => (int) $attempt['invoice_id'], 'gateway_id' => (int) $attempt['gateway_id'],
-            'get' => ['invoice_id' => (int) $attempt['invoice_id'], 'attempt_id' => $attemptId],
+            'get' => ['invoice_id' => (int) $attempt['invoice_id'], 'attempt_id' => $attemptId, 'reconciliation_id' => bin2hex(random_bytes(16))],
             'post' => ['id' => $paymentId],
         ]);
     }
@@ -60,10 +61,10 @@ final class PaymentService
         $attempt = $this->attempts->connection->transactional(function () use ($invoice, $gatewayId, $environment, $key): array {
             $this->lockInvoice($invoice);
             $this->assertPayable($invoice);
-            $amount = $this->outstanding($invoice);
             if (($existing = $this->attempts->active((int) $invoice->getId())) !== null) {
                 return $existing;
             }
+            $amount = $this->outstanding($invoice);
             // All callbacks originate in the host gateway service, never request input.
             $boundAdapter = $this->di['mod_service']('Invoice', 'PayGateway')->getPaymentAdapter(
                 $invoiceGateway = $this->di['em']->getRepository(PayGateway::class)->find($gatewayId), $invoice
@@ -91,7 +92,7 @@ final class PaymentService
                 ],
             ];
 
-            return $this->attempts->reserve([
+            $attempt = $this->attempts->reserve([
                 'id' => $id, 'invoice_id' => $invoice->getId(), 'active_invoice' => $invoice->getId(),
                 'gateway_id' => $gatewayId, 'client_id' => $invoice->getClientId(), 'payment_id' => null,
                 'environment' => $environment, 'amount' => $amount, 'currency' => $currency,
@@ -100,8 +101,11 @@ final class PaymentService
                 'request' => json_encode($payload, JSON_THROW_ON_ERROR),
                 'created_at' => time(), 'updated_at' => time(), 'lease_until' => 0,
             ]);
+
+            return $attempt;
         });
 
+        $this->assertNoLegacyCredit($attempt);
         if ((int) $attempt['gateway_id'] !== $gatewayId || $attempt['environment'] !== $environment) {
             throw new \Payment_Exception('An existing MolliePayments attempt uses a different gateway or environment. Reconcile it before retrying.');
         }
@@ -162,6 +166,7 @@ final class PaymentService
             throw new \Payment_Exception('Invalid Mollie payment callback.', [], 400);
         }
         $attempt = $this->attempts->find($attemptId);
+        $this->assertNoLegacyCredit($attempt);
         [, , $environment, $key] = $this->gateway($gatewayId);
         $tx = $this->di['em']->getRepository(Transaction::class)->find($transactionId);
         if (!$tx instanceof Transaction || (int) $tx->getGateway()?->getId() !== $gatewayId
@@ -183,8 +188,12 @@ final class PaymentService
                     $tx->setTxnId($current['payment_id']);
                     $tx->setTxnStatus($current['status']);
                     $tx->setCurrency($current['currency']);
-                    $tx->setStatus($terminal ? Transaction::STATUS_ERROR : Transaction::STATUS_RECEIVED);
-                    $tx->setError($terminal ? 'Mollie payment ended without settlement. A new checkout may be started.' : null);
+                    $tx->setStatus($terminal ? Transaction::STATUS_PROCESSED : Transaction::STATUS_RECEIVED);
+                    $tx->setAmount($terminal ? '0.00' : null);
+                    $tx->setType(\Payment_Transaction::TXTYPE_UNKNOWN);
+                    $tx->setNote($terminal ? 'Mollie callback handled: ' . $current['status'] . '; no money received or invoice settled.' : null);
+                    $tx->setError(null);
+                    $tx->setErrorCode(null);
                     $tx->setUpdatedAt(new \DateTime());
                     $this->di['em']->flush();
                 }
@@ -408,45 +417,55 @@ final class PaymentService
             throw new \Payment_Exception('Invoice and client currencies must match for MolliePayments.');
         }
         $minor = Amount::minor(Amount::fromHost($this->invoiceService()->getTotalWithTax($invoice)));
+        if ($minor <= 0) {
+            throw new \Payment_Exception('Invoice has no positive outstanding amount.');
+        }
         if ($invoice->getCredit() !== null && Amount::minor($invoice->getCredit()) !== 0) {
             throw new \Payment_Exception('Legacy invoice credit requires reconciliation before Mollie checkout.');
         }
         $items = $this->di['em']->getRepository(InvoiceItem::class)->findBy(['invoice' => $invoice]);
-        $charged = false;
-        $chargedMinor = 0;
         foreach ($items as $item) {
             if ($item->getType() === InvoiceItem::TYPE_DEPOSIT) {
                 throw new \Payment_Exception('Add Funds invoices are not supported by MolliePayments yet.');
             }
             if ($item->getCharged()) {
-                $charged = true;
-                $allocated = Amount::minor(Amount::fromHost($this->di['mod_service']('Invoice', 'InvoiceItem')->getTotalWithTax($item)));
-                $chargedMinor += $allocated;
-                $minor -= $allocated;
+                throw new \Payment_Exception('Partially allocated invoices are unsupported. Reconcile through FOSSBilling before Mollie checkout.');
             }
         }
-        // The host has no arbitrary partial-payment allocation API. Do not guess
-        // whether earlier transaction credits remain spendable or were allocated.
-        $transactions = $this->di['em']->getRepository(Transaction::class)->findBy(['invoice' => $invoice, 'status' => Transaction::STATUS_PROCESSED]);
-        if (!$charged && $transactions !== []) {
-            throw new \Payment_Exception('Existing invoice payments require reconciliation before Mollie checkout.');
+        // No outstanding-balance API exists in the tested host. Detect prior
+        // allocations, but never interpret ledger amounts or reconstruct a balance.
+        $allocations = $this->di['em']->getRepository(\Box\Mod\Client\Entity\ClientBalance::class)->count([
+            'client' => $client, 'type' => 'invoice', 'relId' => (string) $invoice->getId(),
+        ]);
+        foreach (['molliepayments_reserve', 'molliepayments_release'] as $legacyType) {
+            if ($this->di['em']->getRepository(\Box\Mod\Client\Entity\ClientBalance::class)->count([
+                'client' => $client, 'type' => $legacyType, 'relId' => (string) $invoice->getId(),
+            ]) > 0) {
+                throw new \Payment_Exception('Legacy account-credit history requires manual reconciliation before Mollie checkout.', [], 409);
+            }
         }
-        $recordedMinor = 0;
+        $transactions = $this->di['em']->getRepository(Transaction::class)->findBy(['invoice' => $invoice]);
         foreach ($transactions as $transaction) {
-            if ($transaction->getAmount() === null || $transaction->getCurrency() !== $currency
-                || Amount::minor($transaction->getAmount()) < 0) {
-                throw new \Payment_Exception('Existing invoice payments require amount and currency reconciliation.');
+            if ($transaction->getStatus() === Transaction::STATUS_PROCESSED
+                && ($transaction->getAmount() === null || Amount::minor($transaction->getAmount()) !== 0)) {
+                throw new \Payment_Exception('Previous invoice payments require reconciliation before Mollie checkout.');
             }
-            $recordedMinor += Amount::minor($transaction->getAmount());
         }
-        if ($recordedMinor > $chargedMinor) {
-            throw new \Payment_Exception('Existing invoice payments exceed allocated charges. Reconciliation is required.');
-        }
-        if ($minor <= 0 || $items === []) {
-            throw new \Payment_Exception('Invoice has no positive outstanding amount.');
+        if ($allocations > 0 || $items === []) {
+            throw new \Payment_Exception('Invoice allocations require reconciliation before Mollie checkout.');
         }
 
         return Amount::decimal($minor);
+    }
+
+    /** Read-only transition guard: historical split payments must not settle as full invoices. */
+    private function assertNoLegacyCredit(array $attempt): void
+    {
+        if (Amount::minor((string) ($attempt['credit_amount'] ?? '0.00')) !== 0
+            || !in_array($attempt['credit_state'] ?? 'none', ['none', ''], true)
+            || !empty($attempt['reservation_ledger_id']) || !empty($attempt['release_ledger_id'])) {
+            throw new \Payment_Exception('Legacy account-credit attempt requires manual reconciliation. Preserve its records and follow docs/PAYMENTS.md.', [], 409);
+        }
     }
 
     private function assertInvoiceMatches(Invoice $invoice, array $attempt): void
@@ -494,15 +513,6 @@ final class PaymentService
 
     private function checkoutUrl(Payment $payment): string
     {
-        $url = $payment->getCheckoutUrl();
-        $parts = is_string($url) ? parse_url($url) : false;
-        if ($parts === false || ($parts['scheme'] ?? '') !== 'https'
-            || ($parts['host'] ?? '') !== 'www.mollie.com' || !str_starts_with($parts['path'] ?? '', '/checkout/')
-            || isset($parts['user']) || isset($parts['pass']) || isset($parts['port'])
-            || preg_match('/[\x00-\x20\x7f]/', $url)) {
-            throw new \Payment_Exception('Mollie returned an invalid checkout URL.');
-        }
-
-        return $url;
+        return Support\CheckoutUrl::validate($payment->getCheckoutUrl());
     }
 }

@@ -157,19 +157,14 @@ test('untrusted callback identifiers cannot select a foreign attempt', function 
         ->and(count($ctx->requests))->toBe(1);
 })->with(['invalid', 'array', 'unknown', 'invoice', 'id']);
 
-test('allocated invoice items reduce the payable balance and are not debited twice', function (): void {
+test('partially allocated invoice items fail closed without another provider request', function (): void {
     $ctx = molliePaymentContext();
     $ctx->item->setCharged(true);
-    $extra = new InvoiceItem();
-    $extra->setInvoice($ctx->invoice)->setTitle('Outstanding service')->setType(InvoiceItem::TYPE_CUSTOM)->setPrice('7.66')->setQuantity(1);
-    $ctx->em->persist($extra);
     $ctx->em->flush();
-    $ctx->payments->checkout($ctx->invoice->getId(), $ctx->gateway->getId());
-    expect($ctx->payload['amount']['value'])->toBe('7.66');
-    $ctx->status = 'paid';
-    mollieWebhook($ctx);
-    expect($ctx->invoice->getStatus())->toBe(Invoice::STATUS_PAID)
-        ->and((float) $ctx->db->fetchOne('SELECT SUM(amount) FROM client_balance'))->toBe(0.0);
+    expect(fn () => $ctx->payments->checkout($ctx->invoice->getId(), $ctx->gateway->getId()))
+        ->toThrow(Payment_Exception::class, 'Partially allocated')
+        ->and($ctx->requests)->toBeEmpty()
+        ->and($ctx->db->fetchOne('SELECT COUNT(*) FROM client_balance'))->toBe(0);
 });
 
 test('database uniqueness and checkout leases prevent competing active attempts', function (): void {
@@ -291,7 +286,7 @@ test('untrusted checkout hosts cannot become browser redirects', function (): vo
 
         return $payment;
     };
-    expect(fn () => $ctx->payments->checkout($ctx->invoice->getId(), $ctx->gateway->getId()))->toThrow(Payment_Exception::class, 'invalid checkout URL');
+    expect(fn () => $ctx->payments->checkout($ctx->invoice->getId(), $ctx->gateway->getId()))->toThrow(Payment_Exception::class, 'unsafe checkout URL');
 });
 
 test('gateway and environment switches cannot replay an existing attempt', function (bool $environment): void {

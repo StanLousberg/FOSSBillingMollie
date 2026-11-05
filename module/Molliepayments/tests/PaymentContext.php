@@ -29,7 +29,7 @@ require_once __DIR__ . '/Support.php';
 MollieClientFactory::bootSdk();
 
 /** Real disposable SQLite accounting tables and native services; no host DB is used. */
-function molliePaymentContext(string $environment = 'test', ?string $databasePath = null, bool $initialize = true): object
+function molliePaymentContext(string $environment = 'test', ?string $databasePath = null, bool $initialize = true, ?array $connectionParameters = null): object
 {
     $ctx = new stdClass();
     $ctx->di = Tests\Helpers\container();
@@ -37,13 +37,29 @@ function molliePaymentContext(string $environment = 'test', ?string $databasePat
     $config->setNamingStrategy(new UnderscoreNamingStrategy(CASE_LOWER));
     $config->setProxyDir(sys_get_temp_dir());
     $config->setProxyNamespace('MolliePaymentsTestProxies');
-    $ctx->em = new EntityManager(DriverManager::getConnection($databasePath === null ? ['driver' => 'pdo_sqlite', 'memory' => true] : ['driver' => 'pdo_sqlite', 'path' => $databasePath]), $config);
+    $ctx->em = new EntityManager(DriverManager::getConnection($connectionParameters ?? ($databasePath === null ? ['driver' => 'pdo_sqlite', 'memory' => true] : ['driver' => 'pdo_sqlite', 'path' => $databasePath])), $config);
     $ctx->db = $ctx->em->getConnection();
     $classes = [Client::class, ClientBalance::class, Currency::class, Invoice::class, InvoiceItem::class,
         InvoiceEvent::class, PayGateway::class, Transaction::class, MolliePaymentAttempt::class, Box\Mod\Order\Entity\Order::class];
-    $ctx->db->executeStatement('PRAGMA busy_timeout = 5000');
+    if ($ctx->db->getDatabasePlatform() instanceof Doctrine\DBAL\Platforms\SQLitePlatform) {
+        $ctx->db->executeStatement('PRAGMA busy_timeout = 5000');
+    }
     if ($initialize) {
-        (new SchemaTool($ctx->em))->createSchema(array_map($ctx->em->getClassMetadata(...), $classes));
+        $metadata = array_map($ctx->em->getClassMetadata(...), $classes);
+        if ($connectionParameters !== null) {
+            // Include referenced host entities so MySQL can enforce real foreign keys.
+            $known = array_fill_keys($classes, true);
+            for ($i = 0; $i < count($metadata); ++$i) {
+                foreach ($metadata[$i]->associationMappings as $mapping) {
+                    if (!isset($known[$mapping->targetEntity])) {
+                        $known[$mapping->targetEntity] = true;
+                        $metadata[] = $ctx->em->getClassMetadata($mapping->targetEntity);
+                    }
+                }
+            }
+            (new SchemaTool($ctx->em))->dropSchema($metadata);
+        }
+        (new SchemaTool($ctx->em))->createSchema($metadata);
     }
     $ctx->di['em'] = $ctx->em;
     unset($ctx->di['dbal']);
@@ -51,6 +67,7 @@ function molliePaymentContext(string $environment = 'test', ?string $databasePat
     $ctx->di['api_system'] = new stdClass();
     $ctx->di['crypt'] = Tests\Helpers\cryptMock();
     $ctx->di['event_dispatcher'] = new Symfony\Component\EventDispatcher\EventDispatcher();
+    $ctx->connectionParameters = $connectionParameters;
     if ($initialize) {
         $ctx->client = new Client();
         $ctx->client->setCurrency('EUR');
@@ -91,7 +108,8 @@ function molliePaymentContext(string $environment = 'test', ?string $databasePat
         $ctx->invoice = $ctx->em->getRepository(Invoice::class)->findOneBy([]);
         $ctx->item = $ctx->em->getRepository(InvoiceItem::class)->findOneBy([]);
         $ctx->key = json_decode($ctx->gateway->getConfig(), true)['test_api_key'];
-        $ctx->payload = json_decode($ctx->db->fetchOne('SELECT request FROM molliepayments_attempt LIMIT 1'), true);
+        $request = $ctx->db->fetchOne('SELECT request FROM molliepayments_attempt LIMIT 1');
+        $ctx->payload = $request ? json_decode($request, true) : null;
     }
     $ctx->invoiceService = Mockery::mock(Box\Mod\Invoice\Service::class)->makePartial();
     // Auth is tested as a separate boundary: CLI bypasses it in the native host.
@@ -166,7 +184,7 @@ function molliePaymentContext(string $environment = 'test', ?string $databasePat
 
 function mollieProviderPayment(object $ctx): array
 {
-    $result = ['resource' => 'payment', 'id' => 'tr_disposable123', 'mode' => $ctx->gateway->isTestMode() ? 'test' : 'live',
+    $result = ['resource' => 'payment', 'id' => $ctx->paymentId ?? 'tr_disposable123', 'mode' => $ctx->gateway->isTestMode() ? 'test' : 'live',
         'description' => 'Disposable invoice', 'amount' => $ctx->payload['amount'], 'status' => $ctx->status,
         'sequenceType' => 'oneoff', 'metadata' => $ctx->payload['metadata'],
         'expiresAt' => date(DATE_ATOM, time() + 900),
@@ -181,7 +199,7 @@ function mollieProviderPayment(object $ctx): array
 
 function mollieAttempt(object $ctx): array
 {
-    return $ctx->db->fetchAssociative('SELECT * FROM molliepayments_attempt ORDER BY created_at DESC LIMIT 1');
+    return $ctx->db->fetchAssociative('SELECT * FROM molliepayments_attempt WHERE invoice_id = ? ORDER BY created_at DESC LIMIT 1', [$ctx->invoice->getId()]);
 }
 
 function mollieWebhook(object $ctx, ?array $data = null): Transaction
@@ -195,7 +213,7 @@ function mollieWebhook(object $ctx, ?array $data = null): Transaction
     $ctx->em->flush();
     $ctx->payments->processTransaction((int) $tx->getId(), $data ?? [
         'get' => ['invoice_id' => $ctx->invoice->getId(), 'attempt_id' => $attempt['id']],
-        'post' => ['id' => 'tr_disposable123'],
+        'post' => ['id' => $ctx->paymentId ?? 'tr_disposable123'],
     ], (int) $ctx->gateway->getId());
 
     return $tx;

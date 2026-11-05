@@ -46,7 +46,7 @@ module/Molliepayments/vendor/
 
 That directory is deliberately ignored by Git. The class `Box\Mod\Molliepayments\Support\MollieClientFactory` loads its Composer autoloader when needed and provides configured clients to connection tests, checkout and reconciliation.
 
-**No Composer lock file exists in the initial scaffold.** Composer will resolve and generate one on the first install. Contributors should commit the resulting `composer.lock` in a subsequent dependency-lock change to make future installations deterministic.
+The committed `composer.lock` pins reproducible SDK installations. Use `composer install`; do not update dependencies during deployment.
 
 If your host does not have compatible PHP and Composer, start DDEV first (step 5) and install in the container:
 
@@ -141,7 +141,9 @@ Install/activate the development extension, then follow [one-time payment setup]
 
 ### Compatible FOSSBilling host
 
-This feature relies on the current FOSSBilling gateway contract: `secret` fields, `required_when`, encrypted `SecretConfig` storage, masking through `ServicePayGateway::toApiArray()`, preservation of blank secret updates and decrypted `getPaymentAdapter()`. It was tested against host commit `97bb583dd681e311e2d10fe8c648095f2a479878`. The manifest's `>=0.8.9` constraint alone does not guarantee an older build has these security features. Verify the contract before deployment; hosts without it are unsupported. Never patch core or fall back to plaintext storage. CI tests these behaviors against its upstream checkout.
+Use the explicitly tested FOSSBilling development baseline `97bb583dd681e311e2d10fe8c648095f2a479878`, or a contract-compatible development build covered by CI's current `main` job. Published 0.8.9 is unsupported. The manifest identifies preview version `0.0.1`; it does not promise support for arbitrary later releases. Encrypted gateway secrets, masking/blank updates, invoice authorization/locking, transaction claims, deferred events and module-scoped schema sync are mandatory. Runtime guards reject missing contracts; never patch core or use plaintext fallback.
+
+Existing wallet experiments require the non-destructive [transition review](PAYMENTS.md#legacy-wallet-transition) before accepting new payments. Migrations retain legacy columns and financial history; they do not release reserved balances automatically.
 
 ### Obtain, save and rotate credentials
 

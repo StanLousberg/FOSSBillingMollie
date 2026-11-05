@@ -45,10 +45,10 @@ This is an **unofficial open-source project**. It is not affiliated with, sponso
 
 ## Requirements
 
-- A development installation of [FOSSBilling](https://github.com/FOSSBilling/FOSSBilling) using **PHP 8.3 or newer**.
+- FOSSBilling development baseline `97bb583dd681e311e2d10fe8c648095f2a479878` with **PHP 8.3+**; CI also covers current upstream `main`. Published 0.8.9 is unsupported.
 - Composer 2, Git and the PHP extensions required by FOSSBilling and the Mollie SDK (including cURL and OpenSSL).
 - For the recommended local development workflow: [DDEV](https://ddev.com/) and Docker.
-- A [Mollie account](https://www.mollie.com/) and a **test** API key when implementing API calls (not required for the current smoke tests).
+- A [Mollie account](https://www.mollie.com/) and a **test** API key when implementing API calls (not required for automated tests).
 
 The dependency is the [official Mollie PHP API client](https://github.com/mollie/mollie-api-php), constrained to `^4.0`.
 
@@ -176,3 +176,5 @@ Do not share live API keys, payment identifiers tied to real customers, personal
 ## License
 
 The integration source is licensed under [Apache-2.0](LICENSE). The Mollie PHP SDK has its own license and is installed separately through Composer. Mollie's logo and trademarks are not covered by this project's source-code license; see [BRANDING.md](docs/BRANDING.md).
+
+MolliePayments owns provider communication, verified callbacks and payment-attempt idempotency. FOSSBilling owns balances, credit payments, accounting and activation. No wallet reservations or mixed-credit allocation are implemented. Partially allocated invoices fail closed. See [architecture, legacy data transition and supported development baseline](docs/PAYMENTS.md), [core proposals](docs/FOSSBILLING_CORE_PROPOSALS.md) and [validation evidence](docs/VALIDATION.md).

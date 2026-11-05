@@ -21,6 +21,29 @@ This document describes the repository's goals, constraints, architecture and wo
 5. Do not depend on modifications to FOSSBilling's installer, cron implementation, invoice internals or admin themes.
 6. Keep the module's public API minimal and consistent with FOSSBilling lifecycle/event conventions. Verify actual extension hooks against the FOSSBilling version being tested.
 
+## MolliePayments is an adapter, not a billing system
+
+Allowed responsibilities: credential configuration and connection tests, SDK payment creation, Hosted Checkout redirects, provider identifiers mapped to invoices, payment-attempt state, webhook verification, provider-specific idempotency/retry protection and minimal reconciliation. Customer/mandate and recurring integration belong to a future phase, not speculative code now.
+
+FOSSBilling owns customer wallets and balances, credit reservation/release, invoice accounting, pricing and tax, general partial-payment allocation, the transaction ledger, service activation and renewal scheduling, financial reports and transaction statuses. Never implement an alternative to these inside this module.
+
+Mandatory principles:
+
+1. Keep the gateway thin and module persistence minimal.
+2. Add a table only when necessary for provider-specific state.
+3. Never duplicate host financial calculations; use supported FOSSBilling services.
+4. Never modify core to make the extension work.
+5. Never silently implement generic host features inside MolliePayments.
+6. Treat unsupported host behavior as an explicit limitation.
+7. Propose reusable improvements upstream instead of adapter-specific replacements.
+8. Avoid speculative abstractions and future-phase functionality.
+9. Preserve financial security, idempotency and auditability while simplifying.
+10. Document decisions affecting these boundaries in docs/PAYMENTS.md and docs/FOSSBILLING_CORE_PROPOSALS.md.
+
+Before adding a feature, ask: **Would this functionality also be useful to Stripe, PayPal, Adyen or another FOSSBilling payment gateway?** If yes, investigate whether it belongs in FOSSBilling core first. Do not gradually turn this adapter into a separate billing platform.
+
+Legacy wallet columns and ledger history must be preserved by additive-only migrations. No automated releases, column drops, ledger deletion or clearing active attempts. Block legacy split attempts for audited administrative reconciliation; never reuse them as full-invoice payments.
+
 ## Credential and connection-test boundaries
 
 - Store Live and Test keys only through FOSSBilling's encrypted gateway secret fields. Preserve native blank-field updates and API masking; do not add a second credential store.
@@ -54,7 +77,7 @@ This document describes the repository's goals, constraints, architecture and wo
 - A committed unique active-invoice reservation precedes any provider creation request. Preserve exact payload/idempotency identity across retries; never replay unresolved creation after 45 minutes or with a rotated credential.
 - Only authenticated `paid` with a paid timestamp settles. Invoice locking, native transaction claims and the attempt settlement guard jointly protect accounting; never re-claim a transaction inside the adapter.
 - Commit the verified credit, native invoice debit/paid state, transaction history and attempt guard atomically. Dispatch payment events after commit; native cron executes pending item tasks.
-- Charged items reduce outstanding amounts. Unallocated wallet credits are not reserved by checkout; ambiguous partial transactions, currency mismatches, non-two-decimal currencies and Add Funds invoices fail closed.
+- Checkout never reserves or spends existing account credit. Previously charged items and prior invoice allocations fail closed until FOSSBilling provides a supported outstanding-balance API; currency mismatches, non-two-decimal currencies and Add Funds invoices also fail closed.
 - Preserve attempts on upgrades/removal. Schema installation/update uses `SchemaSynchronizer::syncEntities()` for module entities only; no core migrations or destructive schema sync.
 - CLI recovery must use the same native claimed transaction/verification path. Never clear an unresolved active slot simply to unblock a checkout.
 
