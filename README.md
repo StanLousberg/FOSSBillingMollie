@@ -6,7 +6,7 @@
 
 An independent Mollie payment gateway and companion extension for FOSSBilling, using the official Mollie PHP SDK v4. No FOSSBilling core changes are required.
 
-**Development only; not production-ready.** One-time Hosted Checkout, verified webhooks, native invoice settlement, encrypted Test/Live credentials, connection testing and CLI recovery are implemented. Real Test-mode payments and public callbacks have been verified; remaining validation gaps are recorded in [VALIDATION.md](docs/VALIDATION.md). Recurring payments, mandates and refunds are not implemented.
+**Development only; not production-ready.** One-time Hosted Checkout, verified webhooks, native invoice settlement, encrypted Test/Live credentials, connection testing and CLI recovery are implemented. Real Test-mode payments and public callbacks have been verified; remaining validation gaps are recorded in [VALIDATION.md](docs/VALIDATION.md). Internal opt-in Customer creation/reuse and CLI Customer recovery are implemented as a foundation for future onboarding; Customer creation, verification, idempotent retry and recovery have been validated against the real Test API using disposable fixtures. Recurring payments, mandates and refunds are not implemented.
 
 MolliePayments owns provider communication and payment-attempt idempotency. FOSSBilling owns balances, invoice pricing/tax, accounting and activation. Existing account credit is never reserved or split by this adapter; unsupported partial invoice allocations fail closed.
 

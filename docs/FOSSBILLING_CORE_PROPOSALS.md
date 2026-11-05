@@ -17,3 +17,7 @@ Current `getTotalWithTax()` reports the total; `tryPayWithCredits()` settles a f
 Separate callback processing status from financial outcome. Represent canceled, failed and expired provider payments as ordinary unsuccessful results with zero money received, distinguishable from technical exceptions. Define API/UI labels, retry behavior, duplicate callback handling and report filters. Preserve existing transaction status compatibility and immutable payment history.
 
 Until core supports this, MolliePayments uses existing `processed` with amount `0.00`, type `unknown`, provider status and an explanatory note. This records handled callbacks without creating revenue or customer credit; third-party reports must not equate processed-row counts with successful payments.
+
+## Provider Customer mappings
+
+Issue #7 adds only Mollie-specific Customer identifiers, creation identity and recovery state. These are provider integration responsibilities and do not require core accounting or client lifecycle changes. No generic customer synchronization, consent system or recurring scheduler is implemented. Issue #8 must consume the internal Customer service explicitly; mandate authorization and first-payment orchestration remain separate work.

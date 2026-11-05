@@ -97,3 +97,40 @@ Before/after checksums of every pre-existing row in `invoice`, `client_balance`,
 Fix/retest: fixture consolidation initially missed the helper's `Amount` import; restored it and reran the affected balance/logo tests, then full suites on both host revisions. The temporary real-payment harness initially compared an SDK status enum with a string; switched it to SDK `isPaid()` and repeated provider/database verification, duplicate delivery and activation. Neither failure required changing financial expectations or skipping tests.
 
 The earlier real-provider terminal-state and interactive-browser gaps listed above remain **not verified** in this cleanup run. The real regression used hosted HTTP forms, not an interactive browser. Canceled, failed, expired, pending and authorized accounting remains covered by provider fakes and native database tests. No Live keys were used or overwritten; no core files were modified. The result is committed locally only, with no push or PR.
+
+## Issue #7 Customer integration — 2026-11-05
+
+Local validation on the existing disposable DDEV host (PHP 8.3.30, MariaDB 11.8), using locked SDK v4.0.0 and mocked provider calls:
+
+- `composer validate --strict --no-check-publish`: passed.
+- `composer install --no-interaction --prefer-dist --no-progress`: passed; lock unchanged.
+- PHP syntax: all 34 non-vendor PHP files passed.
+- PHP-CS-Fixer dry run: 34 files checked, zero fixes required.
+- Complete unit/SQLite suite: **178 tests, 928 assertions**, zero skipped/unexecuted in that suite.
+- MariaDB integration suite, with `MOLLIEPAYMENTS_MYSQL_URL` pointing only at `molliepayments_test`: **12 tests, 93 assertions**, zero skipped/unexecuted in that suite. Includes independent Customer workers, committed creation identity, lost-response retry, expired-window read recovery, repeated verification and additive schema preservation.
+
+The unit suite includes 24 new Customer cases and all existing one-time payment/accounting regressions. Initial direct WSL testing could not execute because PDO SQLite is absent; final successful suites ran inside DDEV. The added MariaDB regression exposed and now covers MySQL's zero-changed-row behavior for same-second verification writes.
+
+The existing GitHub Actions four-job compatibility matrix is triggered by the feature PR (pinned host and upstream main, SQLite and MariaDB). Its final status is reported on that PR. The initial implementation did not include a real Customer API run; the subsequent review below adds that evidence. This evidence does not establish production readiness or recurring capability.
+
+
+## Issue #7 review and real Test API validation — 2026-11-05
+
+Reviewed the complete feature diff against issue #7 and the installed SDK v4.0.0 contracts. The feature branch was already identical to its remote tracking branch. The review fixed three state-handling defects: expired creations lost the specific recovery diagnostic, observed profile mismatches did not prevent subsequent cached reuse, and rejected replacement attempts could block otherwise healthy mappings. Read-only resolution of an unresolved creation now fails without a provider request or mapping mutation. No schema or accounting changes were needed.
+
+Final local validation used the existing DDEV host at `ceda8f4952d85d40ecb6601e6e0d09acec557c40` (PHP 8.3.30, MariaDB 11.8):
+
+- Composer strict validation and dependency installation: passed; dependency lock unchanged.
+- Syntax and PHP-CS-Fixer: all **34 PHP files**, zero errors/fixes required.
+- Complete unit/SQLite suite: **186 tests, 994 assertions**, zero skips. Includes **32 Customer cases**, three independently mapped clients, cross-client authorization, provider verification, resource mismatch, Test/Live isolation, timeout/error/409 paths, rotated credentials, durable recovery diagnostics, profile blocking, rejected replacement preservation and all one-time accounting regressions.
+- Complete MariaDB integration suite: **13 tests, 105 assertions**, zero skips. Destructive fixtures were restricted to `molliepayments_test`; no reset of the development database. Independent workers observe the committed creation identity and produce one Customer POST for the shared mapping. Added MariaDB coverage confirms precondition errors preserve healthy mappings and observed profile mismatches block reuse.
+
+A temporary CLI harness outside the repository loaded the unique saved Test-mode gateway via native `ServicePayGateway::getPaymentAdapter()`. It retained the decrypted Test key only in memory and used a fresh in-memory SQLite fixture database for clients, mappings, invoices and native settlement. It made real Mollie Customer API calls; it did not copy secrets or write clients, invoices, mappings or payment attempts to the existing development database.
+
+Two real API runs passed. The first created two metadata-only Test Customers; the final run created three new disposable Test Customers and performed **14 assertions** (13 real Customer assertions plus one mocked-provider/native-accounting assertion). The final run verified creation, cached reuse, authenticated GET identity/mode/opaque metadata, distinct clients, read-only recovery after a simulated expired lost local result, and rejection of a cross-client recovery context. One real Customer POST completed successfully and the harness deliberately discarded its response; a retry using the same payload/key returned exactly the original Customer ID. A fully paginated real provider list contained exactly one Customer per creation reference. The response loss was simulated after a real successful POST; it was not a real network outage. No Live credentials were used. Five metadata-only disposable Test Customers were retained across both runs; no provider records were deleted.
+
+The one-time regression used fake provider payment responses with native accounting, and created no Customer mapping or Customer request. No new real payment was collected during this Customer review. Real one-time payment evidence from earlier validation remains documented above.
+
+Keys, provider IDs, response bodies, client personal records and raw SDK exceptions were excluded from tracked files and harness output. The temporary harness contains no credentials. The existing PR's four GitHub Actions jobs (pinned/current upstream hosts, SQLite/MariaDB) supply the compatibility result; see the PR checks. This validates issue #7 for review, not production readiness, mandates or recurring payments.
+
+GitHub delivery status for this review: the existing PR is [#17](https://github.com/StanLousberg/FOSSBillingMollie/pull/17). All four jobs passed in [run 42039276144](https://github.com/StanLousberg/FOSSBillingMollie/actions/runs/42039276144), but that run covers the original `79b500b` implementation only. Publishing the local review fixes was blocked by missing command-line Git credentials and a canceled GitHub-app write action. The review fixes have therefore not run in GitHub Actions; the earlier green matrix is not evidence for the new local commit.

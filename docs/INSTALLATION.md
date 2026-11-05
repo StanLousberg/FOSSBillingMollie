@@ -102,3 +102,5 @@ Run the complete commands in [VALIDATION.md](VALIDATION.md#automated-execution).
 | Rate limit/provider unavailable | Wait and retry; saved credentials and gateway mode remain unchanged. |
 
 Production packaging, deployment certification, recurring billing and refunds remain outside the current release.
+
+Customer integration adds the module-owned `molliepayments_customer` table. Run the existing module update/migration command before calling the internal Customer service. Synchronization remains additive and preserves payment attempts, legacy columns and Customer mappings. No credentials are migrated or duplicated. See [Customer behavior and recovery](PAYMENTS.md#internal-customer-integration-issue-7).

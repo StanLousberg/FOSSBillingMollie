@@ -235,3 +235,93 @@ test('MariaDB upgrades retain legacy wallet columns and history without releasin
         ->and(mollieAttempt($ctx))->toBe($before)->and(mollieBalance($ctx))->toBe(0)
         ->and((int) $ctx->db->fetchOne('SELECT COUNT(*) FROM client_balance'))->toBe(2);
 });
+
+require_once dirname(__DIR__) . '/CustomerContext.php';
+
+test('MariaDB simultaneous customer workers commit one mapping and one provider creation', function (): void {
+    $ctx = mollieCustomers(mollieMariaContext());
+    $ctx->db->executeStatement('CREATE TABLE IF NOT EXISTS mp_customer_test_calls (mapping_id VARCHAR(32) NOT NULL)');
+    $ctx->db->executeStatement('DELETE FROM mp_customer_test_calls');
+    $ctx->db->close();
+    $job = static function (): void {
+        $child = mollieCustomers(mollieMariaContext(false));
+        $response = $child->customerResponses[Mollie\Api\Http\Requests\CreateCustomerRequest::class];
+        $child->customerResponses[Mollie\Api\Http\Requests\CreateCustomerRequest::class] = static function ($pending) use ($child, $response) {
+            // Separate connection proves identity is committed before network IO.
+            $observer = Doctrine\DBAL\DriverManager::getConnection($child->connectionParameters);
+            $row = $observer->fetchAssociative('SELECT * FROM molliepayments_customer');
+            expect($row['idempotency_key'])->toBe($pending->createPsrRequest()->getHeaderLine('Idempotency-Key'));
+            $observer->insert('mp_customer_test_calls', ['mapping_id' => $row['id']]);
+            $observer->close();
+            usleep(100000);
+
+            return $response($pending);
+        };
+        try {
+            mollieResolveCustomer($child);
+        } catch (Payment_Exception $error) {
+            if (!str_contains($error->getMessage(), 'already in progress')) {
+                throw $error;
+            }
+        }
+        $child->db->close();
+    };
+    mollieMariaWorkers([$job, $job]);
+    $check = mollieCustomers(mollieMariaContext(false));
+    expect((int) $check->db->fetchOne('SELECT COUNT(*) FROM molliepayments_customer'))->toBe(1)
+        ->and((int) $check->db->fetchOne('SELECT COUNT(*) FROM mp_customer_test_calls'))->toBe(1)
+        ->and(mollieResolveCustomer($check))->toBe('cst_disposable');
+});
+
+test('MariaDB customer lost response recovers with the committed idempotency identity', function (): void {
+    $ctx = mollieCustomers(mollieMariaContext());
+    $response = $ctx->customerResponses[Mollie\Api\Http\Requests\CreateCustomerRequest::class];
+    $ctx->customerResponses[Mollie\Api\Http\Requests\CreateCustomerRequest::class] = static function ($pending) use ($response): never {
+        $response($pending);
+        throw new Mollie\Api\Exceptions\RequestTimeoutException($pending, null, 'Simulated lost response');
+    };
+    expect(fn () => mollieResolveCustomer($ctx))->toThrow(Payment_Exception::class);
+    $row = mollieCustomerRow($ctx);
+    $ctx->db->close();
+    $retry = mollieCustomers(mollieMariaContext(false));
+    expect(mollieResolveCustomer($retry))->toBe('cst_disposable')
+        ->and(mollieCustomerRow($retry)['idempotency_key'])->toBe($row['idempotency_key'])
+        ->and(mollieCustomerRow($retry)['request'])->toBe($row['request']);
+});
+
+test('MariaDB customer upgrades preserve mapping and payment records', function (): void {
+    $ctx = mollieCustomers(mollieMariaContext());
+    mollieResolveCustomer($ctx);
+    $ctx->payments->checkout($ctx->invoice->getId(), $ctx->gateway->getId());
+    $customer = mollieCustomerRow($ctx);
+    $attempt = mollieAttempt($ctx);
+    $ctx->db->executeStatement('ALTER TABLE molliepayments_customer ADD legacy_marker VARCHAR(32) DEFAULT NULL');
+    $ctx->services['molliepayments']->update();
+    expect(mollieAttempt($ctx))->toBe($attempt)
+        ->and(mollieCustomerRow($ctx))->toBe($customer + ['legacy_marker' => null]);
+});
+
+test('MariaDB customer repeated verification and expired creation recovery never replace identity', function (): void {
+    $ctx = mollieCustomers(mollieMariaContext());
+    $ctx->customerResponses[Mollie\Api\Http\Requests\CreateCustomerRequest::class] = new Mollie\Api\Fake\MockResponse([], 500);
+    expect(fn () => mollieResolveCustomer($ctx))->toThrow(Payment_Exception::class);
+    $row = mollieCustomerRow($ctx);
+    $ctx->db->update('molliepayments_customer', ['created_at' => time() - 2700], ['id' => $row['id']]);
+    expect(fn () => mollieResolveCustomer($ctx))->toThrow(Payment_Exception::class);
+    expect($ctx->customers->recover($ctx->client->getId(), $ctx->gateway->getId(), $row['id'], 'cst_disposable'))->toBe('cst_disposable')
+        ->and(mollieResolveCustomer($ctx, false, true))->toBe('cst_disposable')
+        ->and(mollieResolveCustomer($ctx, false, true))->toBe('cst_disposable')
+        ->and(mollieCustomerRow($ctx)['idempotency_key'])->toBe($row['idempotency_key']);
+});
+
+test('MariaDB customer precondition failures preserve mapping diagnostics and ownership', function (): void {
+    $ctx = mollieCustomers(mollieMariaContext());
+    mollieResolveCustomer($ctx);
+    $row = mollieCustomerRow($ctx);
+    expect(fn () => $ctx->customers->recover($ctx->client->getId(), $ctx->gateway->getId(), $row['id'], 'cst_other'))->toThrow(Payment_Exception::class, 'cannot replace')
+        ->and(mollieCustomerRow($ctx))->toBe($row);
+    $ctx->profileId = 'pfl_othermerchant';
+    expect(fn () => mollieResolveCustomer($ctx, false, true))->toThrow(Payment_Exception::class, 'profile context changed')
+        ->and(mollieCustomerRow($ctx)['status'])->toBe('blocked');
+    expect(fn () => mollieResolveCustomer($ctx))->toThrow(Payment_Exception::class, 'profile context changed');
+});
