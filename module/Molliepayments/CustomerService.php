@@ -69,6 +69,12 @@ final class CustomerService
         }
         if ($row !== null) {
             $this->assertCredential($row, $key);
+            if ($recovery !== null && $row['customer_id'] !== null && $row['customer_id'] !== $recovery[1]) {
+                throw new \Payment_Exception('Recovery cannot replace an existing Customer.');
+            }
+            if ($row['customer_id'] === null && !$create && $recovery === null) {
+                throw new \Payment_Exception('Customer creation is unresolved. Request an explicit retry or operator recovery.');
+            }
             if ($row['status'] === 'ready' && !$verify && $recovery === null) {
                 return $row['customer_id'];
             }
@@ -89,15 +95,16 @@ final class CustomerService
             ]);
         }
         $this->assertCredential($row, $key);
-        if (!hash_equals($row['profile_id'], $profile->id)) {
-            throw new \Payment_Exception('Customer merchant/profile context changed. Operator reconciliation required.');
-        }
         $lease = bin2hex(random_bytes(16));
         if (!$this->customers->acquire($row['id'], $lease)) {
             throw new \Payment_Exception('Customer operation already in progress. Retry later.');
         }
         try {
             $row = $this->customers->find($clientId, $gatewayId, $environment);
+            if (!hash_equals($row['profile_id'], $profile->id)) {
+                $this->customers->update($row['id'], $lease, ['status' => 'blocked', 'error' => 'profile_context_changed']);
+                throw new \Payment_Exception('Customer merchant/profile context changed. Operator reconciliation required.');
+            }
             $providerId = $recovery[1] ?? $row['customer_id'];
             if ($row['customer_id'] !== null && $providerId !== $row['customer_id']) {
                 throw new \Payment_Exception('Recovery cannot replace an existing Customer.');
@@ -110,25 +117,29 @@ final class CustomerService
                     $this->customers->update($row['id'], $lease, ['error' => 'recovery_required']);
                     throw new \Payment_Exception('Unresolved Customer creation requires operator recovery.');
                 }
-                $payload = json_decode($row['request'], true, 512, JSON_THROW_ON_ERROR);
-                $client->setIdempotencyKey($row['idempotency_key']);
-                $customer = $this->provider(fn () => $client->send(new CreateCustomerRequest(metadata: $payload['metadata'])));
-            } else {
-                $customer = $this->provider(fn () => $client->send(new GetCustomerRequest($providerId)));
             }
-            $metadata = $customer instanceof Customer ? (array) ($customer->metadata ?? []) : [];
-            if (!$customer instanceof Customer || $customer->resource !== 'customer' || !isset($customer->id, $customer->mode)
-                || !$this->validCustomerId($customer->id) || $customer->mode !== $environment
-                || ($providerId !== null && $customer->id !== $providerId)
-                || $metadata !== json_decode($row['request'], true, 512, JSON_THROW_ON_ERROR)['metadata']) {
-                throw new \Payment_Exception('Mollie Customer identity verification failed. Operator recovery required.');
-            }
-            $this->customers->update($row['id'], $lease, ['customer_id' => $customer->id, 'status' => 'ready', 'error' => null]);
+            try {
+                if ($providerId === null) {
+                    $payload = json_decode($row['request'], true, 512, JSON_THROW_ON_ERROR);
+                    $client->setIdempotencyKey($row['idempotency_key']);
+                    $customer = $this->provider(fn () => $client->send(new CreateCustomerRequest(metadata: $payload['metadata'])));
+                } else {
+                    $customer = $this->provider(fn () => $client->send(new GetCustomerRequest($providerId)));
+                }
+                $metadata = $customer instanceof Customer ? (array) ($customer->metadata ?? []) : [];
+                if (!$customer instanceof Customer || $customer->resource !== 'customer' || !isset($customer->id, $customer->mode)
+                    || !$this->validCustomerId($customer->id) || $customer->mode !== $environment
+                    || ($providerId !== null && $customer->id !== $providerId)
+                    || $metadata !== json_decode($row['request'], true, 512, JSON_THROW_ON_ERROR)['metadata']) {
+                    throw new \Payment_Exception('Mollie Customer identity verification failed. Operator recovery required.');
+                }
+                $this->customers->update($row['id'], $lease, ['customer_id' => $customer->id, 'status' => 'ready', 'error' => null]);
 
-            return $customer->id;
-        } catch (\Throwable) {
-            $this->customers->update($row['id'], $lease, ['error' => 'verification_or_provider_error', 'status' => $row['customer_id'] === null ? 'creating' : 'blocked']);
-            throw new \Payment_Exception('Customer operation unavailable or unverified. The mapping is preserved; retry safely or use operator recovery.');
+                return $customer->id;
+            } catch (\Throwable) {
+                $this->customers->update($row['id'], $lease, ['error' => 'verification_or_provider_error', 'status' => $row['customer_id'] === null ? 'creating' : 'blocked']);
+                throw new \Payment_Exception('Customer operation unavailable or unverified. The mapping is preserved; retry safely or use operator recovery.');
+            }
         } finally {
             $this->customers->release($row['id'], $lease);
         }

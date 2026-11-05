@@ -313,3 +313,15 @@ test('MariaDB customer repeated verification and expired creation recovery never
         ->and(mollieResolveCustomer($ctx, false, true))->toBe('cst_disposable')
         ->and(mollieCustomerRow($ctx)['idempotency_key'])->toBe($row['idempotency_key']);
 });
+
+test('MariaDB customer precondition failures preserve mapping diagnostics and ownership', function (): void {
+    $ctx = mollieCustomers(mollieMariaContext());
+    mollieResolveCustomer($ctx);
+    $row = mollieCustomerRow($ctx);
+    expect(fn () => $ctx->customers->recover($ctx->client->getId(), $ctx->gateway->getId(), $row['id'], 'cst_other'))->toThrow(Payment_Exception::class, 'cannot replace')
+        ->and(mollieCustomerRow($ctx))->toBe($row);
+    $ctx->profileId = 'pfl_othermerchant';
+    expect(fn () => mollieResolveCustomer($ctx, false, true))->toThrow(Payment_Exception::class, 'profile context changed')
+        ->and(mollieCustomerRow($ctx)['status'])->toBe('blocked');
+    expect(fn () => mollieResolveCustomer($ctx))->toThrow(Payment_Exception::class, 'profile context changed');
+});

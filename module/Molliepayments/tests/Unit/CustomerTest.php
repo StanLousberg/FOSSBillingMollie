@@ -53,7 +53,7 @@ test('customer provider errors retain a recoverable identity and sanitize errors
         expect($error->getMessage())->not->toContain('secret')->and($error->getPrevious())->toBeNull();
     }
     expect(mollieCustomerRow($ctx)['status'])->toBe('creating')->and(mollieCustomerRow($ctx)['customer_id'])->toBeNull();
-})->with([401, 422, 429, 500]);
+})->with([401, 409, 422, 429, 500]);
 
 test('customer unresolved creation cannot replay after the conservative idempotency window', function (): void {
     $ctx = mollieCustomers(molliePaymentContext());
@@ -237,4 +237,111 @@ test('customer provider mapping uniqueness prevents assigning one provider ID to
     $row['idempotency_key'] = $row['id'];
     $row['client_id'] = $ctx->client->getId() + 1;
     expect(fn () => $ctx->db->insert(CustomerRepository::TABLE, $row))->toThrow(Doctrine\DBAL\Exception\UniqueConstraintViolationException::class);
+});
+
+test('customer read only resolution preserves unresolved state without provider calls', function (): void {
+    $ctx = mollieCustomers(molliePaymentContext());
+    $ctx->customerResponses[CreateCustomerRequest::class] = new MockResponse([], 500);
+    expect(fn () => mollieResolveCustomer($ctx))->toThrow(Payment_Exception::class);
+    $before = mollieCustomerRow($ctx);
+    $requests = count($ctx->customerRequests);
+    expect(fn () => mollieResolveCustomer($ctx, false))->toThrow(Payment_Exception::class, 'unresolved')
+        ->and(mollieCustomerRow($ctx))->toBe($before)
+        ->and(count($ctx->customerRequests))->toBe($requests);
+});
+
+test('customer expired creation retains its specific recovery diagnostic', function (): void {
+    $ctx = mollieCustomers(molliePaymentContext());
+    $ctx->customerResponses[CreateCustomerRequest::class] = new MockResponse([], 500);
+    expect(fn () => mollieResolveCustomer($ctx))->toThrow(Payment_Exception::class);
+    $row = mollieCustomerRow($ctx);
+    $ctx->db->update(CustomerRepository::TABLE, ['created_at' => time() - 2700], ['id' => $row['id']]);
+    foreach ([1, 2] as $retry) {
+        expect(fn () => mollieResolveCustomer($ctx))->toThrow(Payment_Exception::class, 'requires operator recovery')
+            ->and(mollieCustomerRow($ctx)['error'])->toBe('recovery_required')
+            ->and(mollieCustomerRow($ctx)['lease'])->toBeNull()
+            ->and(mollieCustomerRow($ctx)['idempotency_key'])->toBe($row['idempotency_key']);
+    }
+});
+
+test('customer observed profile mismatch blocks subsequent cached reuse until verified', function (): void {
+    $ctx = mollieCustomers(molliePaymentContext());
+    mollieResolveCustomer($ctx);
+    $profile = $ctx->profileId;
+    $ctx->profileId = 'pfl_othermerchant';
+    expect(fn () => mollieResolveCustomer($ctx, false, true))->toThrow(Payment_Exception::class, 'profile context changed')
+        ->and(mollieCustomerRow($ctx)['status'])->toBe('blocked')
+        ->and(mollieCustomerRow($ctx)['error'])->toBe('profile_context_changed');
+    expect(fn () => mollieResolveCustomer($ctx))->toThrow(Payment_Exception::class, 'profile context changed');
+    $ctx->profileId = $profile;
+    expect(mollieResolveCustomer($ctx, false, true))->toBe('cst_disposable')
+        ->and(mollieCustomerRow($ctx)['status'])->toBe('ready');
+});
+
+test('customer rejected replacement preserves a healthy mapping and makes no provider calls', function (): void {
+    $ctx = mollieCustomers(molliePaymentContext());
+    mollieResolveCustomer($ctx);
+    $row = mollieCustomerRow($ctx);
+    $requests = count($ctx->customerRequests);
+    expect(fn () => $ctx->customers->recover($ctx->client->getId(), $ctx->gateway->getId(), $row['id'], 'cst_replacement'))->toThrow(Payment_Exception::class, 'cannot replace')
+        ->and(mollieCustomerRow($ctx))->toBe($row)
+        ->and(count($ctx->customerRequests))->toBe($requests)
+        ->and(mollieResolveCustomer($ctx))->toBe('cst_disposable');
+});
+
+test('multiple clients create and independently verify their own provider Customers', function (): void {
+    $ctx = mollieCustomers(molliePaymentContext());
+    $providerCustomer = static function () use ($ctx): array {
+        $customer = mollieCustomerResponse($ctx);
+        $customer['id'] = 'cst_client' . $ctx->client->getId();
+
+        return $customer;
+    };
+    $ctx->customerResponses[CreateCustomerRequest::class] = static fn () => MockResponse::created($providerCustomer());
+    $ctx->customerResponses[GetCustomerRequest::class] = static fn () => MockResponse::ok($providerCustomer());
+    $clients = [$ctx->client];
+    for ($i = 0; $i < 2; ++$i) {
+        $client = new Client();
+        $ctx->em->persist($client);
+        $clients[] = $client;
+    }
+    $ctx->em->flush();
+    $ids = [];
+    foreach ($clients as $client) {
+        $ctx->client = $client;
+        $ctx->di['loggedin_client'] = $client;
+        $ids[] = mollieResolveCustomer($ctx);
+        expect(mollieResolveCustomer($ctx, false, true))->toBe(end($ids));
+    }
+    expect(count(array_unique($ids)))->toBe(3)
+        ->and((int) $ctx->db->fetchOne('SELECT COUNT(*) FROM molliepayments_customer'))->toBe(3);
+    foreach ($clients as $index => $client) {
+        $ctx->client = $client;
+        $ctx->di['loggedin_client'] = $client;
+        expect(mollieResolveCustomer($ctx))->toBe($ids[$index]);
+        $other = $clients[($index + 1) % 3];
+        expect(fn () => $ctx->customers->resolve($other->getId(), $ctx->gateway->getId(), true))->toThrow(Payment_Exception::class, 'access denied');
+    }
+});
+
+test('customer unresolved creation cannot replay with a rotated credential', function (): void {
+    $ctx = mollieCustomers(molliePaymentContext());
+    $ctx->customerResponses[CreateCustomerRequest::class] = new MockResponse([], 500);
+    expect(fn () => mollieResolveCustomer($ctx))->toThrow(Payment_Exception::class);
+    $before = mollieCustomerRow($ctx);
+    $requests = count($ctx->customerRequests);
+    $ctx->gateway->setConfig(json_encode(['test_api_key' => mollieDummyKey('test')]));
+    $ctx->em->flush();
+    expect(fn () => mollieResolveCustomer($ctx))->toThrow(Payment_Exception::class, 'credential context changed')
+        ->and(mollieCustomerRow($ctx))->toBe($before)
+        ->and(count($ctx->customerRequests))->toBe($requests);
+});
+
+test('customer verification rejects a wrong resource type', function (): void {
+    $ctx = mollieCustomers(molliePaymentContext());
+    mollieResolveCustomer($ctx);
+    $ctx->customerResponse = mollieCustomerResponse($ctx);
+    $ctx->customerResponse['resource'] = 'payment';
+    expect(fn () => mollieResolveCustomer($ctx, false, true))->toThrow(Payment_Exception::class)
+        ->and(mollieCustomerRow($ctx)['status'])->toBe('blocked');
 });
