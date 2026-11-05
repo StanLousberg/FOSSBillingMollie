@@ -39,6 +39,24 @@ final class CustomerService
         return $this->run($clientId, $gatewayId, $create, $verify);
     }
 
+    /** Trusted webhook path. Reads the committed attempt; never creates or impersonates a client. */
+    public function verifyOnboardingCustomer(string $attemptId): void
+    {
+        $attempt = (new Repository\AttemptRepository($this->customers->connection))->find($attemptId);
+        $payload = json_decode($attempt['request'], true, 512, JSON_THROW_ON_ERROR);
+        $mapping = $this->customers->find((int) $attempt['client_id'], (int) $attempt['gateway_id'], $attempt['environment']);
+        if ($attempt['status'] !== 'paid' || $attempt['settled_transaction_id'] === null || $attempt['consent_version'] === null
+            || ($payload['sequenceType'] ?? null) !== 'first' || $mapping === null
+            || $mapping['id'] !== ($payload['metadata']['customer_mapping'] ?? null)
+            || $mapping['profile_id'] !== ($payload['metadata']['profile_id'] ?? null)
+            || $mapping['customer_id'] !== ($payload['customerId'] ?? null)) {
+            throw new \Payment_Exception('Unverified onboarding Customer context.');
+        }
+        if ($this->run((int) $attempt['client_id'], (int) $attempt['gateway_id'], false, true) !== $payload['customerId']) {
+            throw new \Payment_Exception('Onboarding Customer verification failed.');
+        }
+    }
+
     /** Explicit operator recovery, authenticated GET only, never a replacement POST. */
     public function recover(int $clientId, int $gatewayId, string $mappingId, string $customerId): string
     {

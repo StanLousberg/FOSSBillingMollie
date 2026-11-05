@@ -57,7 +57,7 @@ function mollieMariaWorkers(array $jobs): void
                 } catch (Throwable $error) {
                     // Fixtures contain dummy credentials only. Keep even test
                     // failures free of request objects and exception traces.
-                    fwrite(STDERR, 'MariaDB worker failed: ' . $error::class . "\n");
+                    fwrite(STDERR, 'MariaDB worker failed: ' . $error::class . ' at ' . basename($error->getFile()) . ':' . $error->getLine() . "\n");
                     exit(1);
                 }
             }
@@ -324,4 +324,109 @@ test('MariaDB customer precondition failures preserve mapping diagnostics and ow
     expect(fn () => mollieResolveCustomer($ctx, false, true))->toThrow(Payment_Exception::class, 'profile context changed')
         ->and(mollieCustomerRow($ctx)['status'])->toBe('blocked');
     expect(fn () => mollieResolveCustomer($ctx))->toThrow(Payment_Exception::class, 'profile context changed');
+});
+
+require_once dirname(__DIR__) . '/OnboardingContext.php';
+
+test('MariaDB concurrent first checkouts commit one consent and provider identity', function (): void {
+    $ctx = mollieOnboarding(mollieMariaContext());
+    // Prepare the independently authorized Customer mapping, then race invoice reservations.
+    mollieResolveCustomer($ctx);
+    $ctx->db->close();
+    $job = static function (): void {
+        $child = mollieOnboarding(mollieMariaContext(false));
+        $post = $child->responses[Mollie\Api\Http\Requests\CreatePaymentRequest::class];
+        $child->responses[Mollie\Api\Http\Requests\CreatePaymentRequest::class] = static function ($pending) use ($post) {
+            // Inspect from a genuinely independent connection before responding to the POST.
+            $reader = mollieMariaContext(false);
+            $row = mollieAttempt($reader);
+            expect($row['consent_version'])->toBe(Box\Mod\Molliepayments\PaymentService::CONSENT_VERSION)
+                ->and($row['consent_accepted_at'])->not->toBeNull()->and($row['lease'])->not->toBeNull();
+            $reader->db->close();
+
+            return $post($pending);
+        };
+        try {
+            mollieFirst($child);
+        } catch (Payment_Exception $error) {
+            if (!str_contains($error->getMessage(), 'already checking') && !str_contains($error->getMessage(), 'already in progress')) {
+                throw $error;
+            }
+        }
+        $child->db->close();
+    };
+    mollieMariaWorkers([$job, $job]);
+    $check = mollieMariaContext(false);
+    expect((int) $check->db->fetchOne('SELECT COUNT(*) FROM molliepayments_attempt'))->toBe(1)
+        ->and((int) $check->db->fetchOne('SELECT COUNT(*) FROM molliepayments_customer'))->toBe(1)
+        ->and(json_decode(mollieAttempt($check)['request'], true)['sequenceType'])->toBe('first')
+        ->and((int) $check->db->fetchOne('SELECT COUNT(*) FROM client_balance'))->toBe(0);
+});
+
+test('MariaDB first payment webhook workers settle once and verify mandate without client session', function (): void {
+    $ctx = mollieOnboarding(mollieMariaContext());
+    mollieCredit($ctx, '10.00');
+    mollieFirst($ctx);
+    $ctx->db->close();
+    $webhook = static function (): void {
+        $child = mollieOnboarding(mollieMariaContext(false));
+        unset($child->di['loggedin_client']);
+        $child->status = 'paid';
+        mollieWebhook($child);
+        $child->db->close();
+    };
+    mollieMariaWorkers([$webhook, $webhook]);
+    $check = mollieOnboarding(mollieMariaContext(false));
+    expect($check->invoice->getStatus())->toBe('paid')->and(mollieBalance($check))->toBe(1000)
+        ->and((int) $check->db->fetchOne("SELECT COUNT(*) FROM client_balance WHERE type = 'transaction'"))->toBe(1)
+        ->and(mollieAttempt($check)['onboarding_status'])->toBe('ready');
+});
+
+test('MariaDB first payment lost response reuses durable consent and recovers missing mandate read only', function (): void {
+    $ctx = mollieOnboarding(mollieMariaContext());
+    $response = $ctx->responses[Mollie\Api\Http\Requests\CreatePaymentRequest::class];
+    $ctx->responses[Mollie\Api\Http\Requests\CreatePaymentRequest::class] = static function ($pending) use ($response): never {
+        $response($pending);
+        throw new RuntimeException('Lost first payment creation response');
+    };
+    expect(fn () => mollieFirst($ctx))->toThrow(Payment_Exception::class);
+    $original = mollieAttempt($ctx);
+    $ctx->db->close();
+    $retry = mollieOnboarding(mollieMariaContext(false));
+    mollieFirst($retry);
+    $retry->status = 'paid';
+    $retry->mandateId = null;
+    mollieWebhook($retry);
+    expect($retry->invoice->getStatus())->toBe('paid')->and(mollieAttempt($retry)['onboarding_status'])->toBe('pending_mandate')
+        ->and(mollieAttempt($retry)['request'])->toBe($original['request'])
+        ->and(mollieAttempt($retry)['consent_accepted_at'])->toBe($original['consent_accepted_at']);
+    $retry->mandateId = 'mdt_disposable';
+    expect($retry->payments->reverifyOnboarding($retry->invoice->getId())['status'])->toBe('ready')
+        ->and((int) $retry->db->fetchOne('SELECT COUNT(*) FROM molliepayments_attempt'))->toBe(1)
+        ->and((int) $retry->db->fetchOne('SELECT COUNT(*) FROM client_balance'))->toBe(2);
+});
+
+test('MariaDB onboarding migration adds nullable evidence without changing historical records', function (): void {
+    $ctx = mollieOnboarding(mollieMariaContext());
+    mollieResolveCustomer($ctx);
+    $ctx->payments->checkout($ctx->invoice->getId(), $ctx->gateway->getId());
+    mollieCredit($ctx, '10.00');
+    $columns = ['consent_version', 'consent_text', 'consent_accepted_at', 'onboarding_status', 'mandate_id', 'mandate_status', 'mandate_verified_at'];
+    foreach ($columns as $column) {
+        $ctx->db->executeStatement('ALTER TABLE molliepayments_attempt DROP COLUMN ' . $column);
+    }
+    $tables = ['molliepayments_customer', 'molliepayments_attempt', 'invoice', 'client_balance', 'transaction', 'pay_gateway'];
+    $before = [];
+    foreach ($tables as $table) {
+        $before[$table] = $ctx->db->fetchAllAssociative('SELECT * FROM ' . $ctx->db->quoteIdentifier($table));
+    }
+    $ctx->services['molliepayments']->update();
+    $ctx->services['molliepayments']->update();
+    foreach ($before as $table => $rows) {
+        $after = $ctx->db->fetchAllAssociative('SELECT * FROM ' . $ctx->db->quoteIdentifier($table));
+        if ($table === 'molliepayments_attempt') {
+            $rows = array_map(static fn ($row) => $row + array_fill_keys($columns, null), $rows);
+        }
+        expect($after)->toBe($rows);
+    }
 });

@@ -187,10 +187,14 @@ function mollieProviderPayment(object $ctx): array
 {
     $result = ['resource' => 'payment', 'id' => $ctx->paymentId ?? 'tr_disposable123', 'mode' => $ctx->gateway->isTestMode() ? 'test' : 'live',
         'description' => 'Disposable invoice', 'amount' => $ctx->payload['amount'], 'status' => $ctx->status,
-        'sequenceType' => 'oneoff', 'metadata' => $ctx->payload['metadata'],
+        'sequenceType' => $ctx->payload['sequenceType'], 'metadata' => $ctx->payload['metadata'],
         'expiresAt' => date(DATE_ATOM, time() + 900),
         '_links' => ['checkout' => ['href' => 'https://www.mollie.com/checkout/disposable123'],
             'self' => ['href' => 'https://api.mollie.com/v2/payments/tr_disposable123']]];
+    if (($ctx->payload['sequenceType'] ?? null) === 'first') {
+        $result += ['customerId' => $ctx->payload['customerId'], 'profileId' => $ctx->profileId ?? 'pfl_disposable',
+            'method' => 'ideal', 'mandateId' => $ctx->mandateId ?? null];
+    }
     if ($ctx->status === 'paid') {
         $result['paidAt'] = date(DATE_ATOM);
     }

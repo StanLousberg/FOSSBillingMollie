@@ -1,0 +1,44 @@
+{% extends "layout_default.html.twig" %}
+{% block meta_title %}Automatic invoice payment authorization{% endblock %}
+{% block content %}
+<h1>Automatic invoice payment authorization</h1>
+<p>This checkout pays invoice #{{ onboarding.invoice_id }}. A valid mandate and your authorization are both required for future automatic collection. This release does not collect invoices automatically.</p>
+<p>Onboarding status: <strong>{{ onboarding.status }}</strong></p>
+<form id="molliepayments-onboarding" method="post" action="{{ 'molliepayments/onboarding_start'|api_url }}">
+    <input type="hidden" name="CSRFToken" value="{{ CSRFToken }}">
+    <input type="hidden" name="invoice_id" value="{{ onboarding.invoice_id }}">
+    <input type="hidden" name="consent_version" value="{{ onboarding.consent_version }}">
+    <div class="mb-3">
+        <label><input type="checkbox" name="consent" value="1" required> {{ onboarding.consent_text }}</label>
+    </div>
+    <button class="btn btn-primary" type="submit">Authorize and pay this invoice</button>
+</form>
+<p><a href="{{ ('invoice/' ~ onboarding.invoice_hash)|url }}">Pay this invoice without automatic payment authorization</a></p>
+<form id="molliepayments-verify" method="post" action="{{ 'molliepayments/onboarding_verify'|api_url }}">
+    <input type="hidden" name="CSRFToken" value="{{ CSRFToken }}">
+    <input type="hidden" name="invoice_id" value="{{ onboarding.invoice_id }}">
+    <button class="btn btn-secondary" type="submit">Check existing payment and mandate</button>
+</form>
+<p id="molliepayments-result" role="status" aria-live="polite"></p>
+<script>
+for (const id of ['molliepayments-onboarding', 'molliepayments-verify']) {
+    document.getElementById(id).addEventListener('submit', async function (event) {
+        event.preventDefault();
+        const button = this.querySelector('button');
+        const result = document.getElementById('molliepayments-result');
+        button.disabled = true;
+        try {
+            const response = await fetch(this.action, {method: 'POST', credentials: 'same-origin', body: new FormData(this)});
+            const body = await response.json();
+            if (body.error) throw new Error(body.error.message || 'Request failed.');
+            if (body.result.checkout_url) window.location.assign(body.result.checkout_url);
+            else result.textContent = body.result.status || 'Payment is processing. Check again later.';
+        } catch (error) {
+            result.textContent = error.message || 'Request failed. Retry later.';
+        } finally {
+            button.disabled = false;
+        }
+    });
+}
+</script>
+{% endblock %}

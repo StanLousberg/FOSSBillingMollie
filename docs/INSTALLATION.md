@@ -81,7 +81,7 @@ The single action resolves our saved gateway server-side, refuses missing/duplic
 
 The test calls SDK `payments->page(null, 1)` ([List Payments](https://docs.mollie.com/reference/list-payments)), without `testmode`. Payment data is discarded and errors are sanitized. Success proves read access at that moment; it does not validate checkout or settlement.
 
-The connection interface uses the native extension settings route, permissions, CSRF and Twig filters. Current FOSSBilling's template finder does not follow module-directory symlinks. `AdminTwigFactory` therefore adds our settings directory only when the native loader cannot resolve the template. Native templates and theme overrides retain priority; no core page, theme or permission-discovery replacement is installed.
+The connection interface uses the native extension settings route, permissions, CSRF and Twig filters. Current FOSSBilling's template finder does not follow module-directory symlinks. `AdminTwigFactory` therefore adds our admin/client template directories only when the native loader cannot resolve the template. Native templates and theme overrides retain priority; no core page, theme or permission-discovery replacement is installed.
 
 ## Public callbacks and tests
 
@@ -104,3 +104,12 @@ Run the complete commands in [VALIDATION.md](VALIDATION.md#automated-execution).
 Production packaging, deployment certification, recurring billing and refunds remain outside the current release.
 
 Customer integration adds the module-owned `molliepayments_customer` table. Run the existing module update/migration command before calling the internal Customer service. Synchronization remains additive and preserves payment attempts, legacy columns and Customer mappings. No credentials are migrated or duplicated. See [Customer behavior and recovery](PAYMENTS.md#internal-customer-integration-issue-7).
+
+
+## First-payment onboarding upgrade
+
+Version 0.3.0 adds seven nullable consent/onboarding/mandate columns to the existing module attempt entity. Run the module migration command above before exposing `/molliepayments/onboarding/INVOICE_ID`. It uses `SchemaSynchronizer::syncEntities()` and preserves old one-time attempts, Customer mappings, financial history and secrets. No new core tables, core migrations or destructive schema synchronization are introduced.
+
+Configure exactly one MolliePayments gateway with a saved Test key, Test mode, Enabled and Allow one-time payments. The client URL resolves that gateway and mode server-side. Keep subscriptions disabled. Customers must log in and own the existing eligible invoice; hash-only payment access cannot authorize future collection. The checkbox is never preselected. Expose the documented URL in operator instructions; this release does not alter native invoice pages or themes.
+
+Profile payment-method eligibility and mandate association/scope limitations are in [PAYMENTS.md](PAYMENTS.md#first-payment-onboarding-issue-8). After a financially paid checkout, use the same page to recheck a missing/pending mandate; do not create another invoice/payment to retry verification. Real Hosted Checkout and public webhook validation remain separate from mocked CI tests.

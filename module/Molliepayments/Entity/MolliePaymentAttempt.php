@@ -73,4 +73,25 @@ class MolliePaymentAttempt
 
     #[ORM\Column(length: 64, nullable: true)]
     public ?string $error = null;
+
+    #[ORM\Column(length: 32, nullable: true)]
+    public ?string $consentVersion = null;
+
+    #[ORM\Column(type: 'text', nullable: true)]
+    public ?string $consentText = null;
+
+    #[ORM\Column(type: 'integer', nullable: true)]
+    public ?int $consentAcceptedAt = null;
+
+    #[ORM\Column(length: 24, nullable: true)]
+    public ?string $onboardingStatus = null;
+
+    #[ORM\Column(length: 128, nullable: true)]
+    public ?string $mandateId = null;
+
+    #[ORM\Column(length: 24, nullable: true)]
+    public ?string $mandateStatus = null;
+
+    #[ORM\Column(type: 'integer', nullable: true)]
+    public ?int $mandateVerifiedAt = null;
 }

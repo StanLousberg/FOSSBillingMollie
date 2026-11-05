@@ -25,6 +25,9 @@ use Mollie\Api\Resources\Payment;
 /** Checkout and authenticated reconciliation; the host remains the accounting authority. */
 final class PaymentService
 {
+    public const CONSENT_VERSION = 'invoice-collection-v1';
+    public const CONSENT_TEXT = 'I authorize future automatic collection of my FOSSBilling invoices through Mollie. Amounts will be based on the actual invoices. I will complete this first payment using the account or card to authorize. Automatic collection is not enabled by this release.';
+
     private const TERMINAL_STATUSES = ['failed', 'canceled', 'expired'];
 
     private readonly AttemptRepository $attempts;
@@ -51,8 +54,97 @@ final class PaymentService
         ]);
     }
 
+    /** An authenticated owner must opt in; gateway and environment come from saved configuration. */
+    public function firstCheckout(int $invoiceId, bool $consent): ?string
+    {
+        $invoice = $this->ownedInvoice($invoiceId);
+        if (!$consent) {
+            throw new \Payment_Exception('Explicit authorization is required. You can still use ordinary one-time checkout.', [], 400);
+        }
+        if ($this->attempts->connection->isTransactionActive()) {
+            throw new \Payment_Exception('Onboarding requires a committed database connection.');
+        }
+        $this->assertPayable($invoice);
+        $this->outstanding($invoice);
+        $gateways = $this->di['em']->getRepository(PayGateway::class)->findBy(['gateway' => 'MolliePayments']);
+        if (count($gateways) !== 1) {
+            throw new \Payment_Exception('Exactly one MolliePayments gateway must be configured for onboarding.');
+        }
+        [$gateway, $environment, $key] = $this->gateway((int) $gateways[0]->getId());
+        if (!$gateway->isEnabled() || !$gateway->isAllowSingle()) {
+            throw new \Payment_Exception('MolliePayments is not enabled for one-time payments.');
+        }
+        if (($active = $this->attempts->active($invoiceId)) !== null) {
+            $this->assertCheckoutKind($active, 'first', (int) $gateway->getId(), $environment);
+        }
+        $customer = (new CustomerService($this->di, $this->clientFactory))->resolve((int) $invoice->getClientId(), (int) $gateway->getId(), true, true);
+        $mapping = (new Repository\CustomerRepository($this->attempts->connection))->find((int) $invoice->getClientId(), (int) $gateway->getId(), $environment);
+        if ($mapping === null || $mapping['status'] !== 'ready' || $customer !== $mapping['customer_id']
+            || !hash_equals($mapping['credential_fingerprint'], hash_hmac('sha256', $mapping['id'], $key))) {
+            throw new \Payment_Exception('Customer context changed. Retry safely.');
+        }
+
+        return $this->checkoutPayment($invoiceId, (int) $gateway->getId(), $mapping);
+    }
+
+    /** Read-only page data; never expose provider identifiers or request/credential data. */
+    public function onboarding(int $invoiceId): array
+    {
+        $invoice = $this->ownedInvoice($invoiceId);
+        $attempt = $this->attempts->connection->fetchAssociative(
+            'SELECT onboarding_status FROM molliepayments_attempt WHERE invoice_id = ? AND consent_version IS NOT NULL ORDER BY CASE WHEN active_invoice IS NOT NULL THEN 0 ELSE 1 END, created_at DESC, id DESC LIMIT 1', [$invoiceId]
+        );
+
+        return ['invoice_id' => $invoiceId, 'invoice_hash' => $invoice->getHash(), 'status' => $attempt['onboarding_status'] ?? 'not_started',
+            'consent_text' => self::CONSENT_TEXT, 'consent_version' => self::CONSENT_VERSION];
+    }
+
+    /** GET-only provider recovery: this action can never create another payment. */
+    public function reverifyOnboarding(int $invoiceId): array
+    {
+        $this->ownedInvoice($invoiceId);
+        $id = $this->attempts->connection->fetchOne(
+            'SELECT id FROM molliepayments_attempt WHERE invoice_id = ? AND consent_version IS NOT NULL ORDER BY CASE WHEN active_invoice IS NOT NULL THEN 0 ELSE 1 END, created_at DESC, id DESC LIMIT 1', [$invoiceId]
+        );
+        if (!is_string($id)) {
+            throw new \Payment_Exception('No onboarding payment exists.');
+        }
+        $attempt = $this->attempts->find($id);
+        if ($attempt['payment_id'] === null) {
+            throw new \Payment_Exception('Payment creation is unresolved. Operator recovery is required.');
+        }
+        $this->reconcile($id, $attempt['payment_id']);
+
+        return $this->onboarding($invoiceId);
+    }
+
+    private function ownedInvoice(int $invoiceId): Invoice
+    {
+        $identity = $this->di['loggedin_client'] ?? null;
+        $invoice = $this->invoice($invoiceId);
+        if (!$identity instanceof Client || (int) $identity->getId() !== (int) $invoice->getClientId()) {
+            throw new \Payment_Exception('Invoice owner authentication required.', [], 403);
+        }
+        $this->invoiceService()->checkInvoiceAuth($invoice, InvoiceOperation::PAYMENT);
+
+        return $invoice;
+    }
+
+    private function assertCheckoutKind(array $attempt, string $sequence, int $gatewayId, string $environment): void
+    {
+        $payload = json_decode($attempt['request'], true, 512, JSON_THROW_ON_ERROR);
+        if (($payload['sequenceType'] ?? null) !== $sequence || (int) $attempt['gateway_id'] !== $gatewayId || $attempt['environment'] !== $environment) {
+            throw new \Payment_Exception('Existing payment has a conflicting sequence type, gateway or environment. Reconcile it before retrying.', [], 409);
+        }
+    }
+
     /** Returns a trusted checkout/invoice URL, or null while the provider is processing. */
     public function checkout(int $invoiceId, int $gatewayId): ?string
+    {
+        return $this->checkoutPayment($invoiceId, $gatewayId);
+    }
+
+    private function checkoutPayment(int $invoiceId, int $gatewayId, ?array $customer = null): ?string
     {
         $invoice = $this->invoice($invoiceId);
         $this->invoiceService()->checkInvoiceAuth($invoice, InvoiceOperation::PAYMENT);
@@ -61,12 +153,20 @@ final class PaymentService
             throw new \Payment_Exception('MolliePayments is not enabled for one-time payments.');
         }
 
-        $attempt = $this->reserveAttempt($invoice, $gateway, $environment, $key);
-
-        $this->assertNoLegacyCredit($attempt);
-        if ((int) $attempt['gateway_id'] !== $gatewayId || $attempt['environment'] !== $environment) {
-            throw new \Payment_Exception('An existing MolliePayments attempt uses a different gateway or environment. Reconcile it before retrying.');
+        if ($customer !== null && ((int) $customer['gateway_id'] !== $gatewayId || $customer['environment'] !== $environment
+            || !hash_equals($customer['credential_fingerprint'], hash_hmac('sha256', $customer['id'], $key)))) {
+            throw new \Payment_Exception('Customer gateway or credential context changed.', [], 409);
         }
+        $attempt = $this->reserveAttempt($invoice, $gateway, $environment, $key, $customer);
+
+        $this->assertCheckoutKind($attempt, $customer === null ? 'oneoff' : 'first', $gatewayId, $environment);
+        if ($customer !== null) {
+            $payload = json_decode($attempt['request'], true, 512, JSON_THROW_ON_ERROR);
+            if (($payload['customerId'] ?? null) !== $customer['customer_id'] || ($payload['metadata']['customer_mapping'] ?? null) !== $customer['id']) {
+                throw new \Payment_Exception('Onboarding Customer association changed.', [], 409);
+            }
+        }
+        $this->assertNoLegacyCredit($attempt);
         $lease = bin2hex(random_bytes(16));
         if (!$this->attempts->acquire($attempt['id'], $lease)) {
             throw new \Payment_Exception('MolliePayments is already checking this invoice. Please retry shortly.');
@@ -92,6 +192,10 @@ final class PaymentService
                 throw new \Payment_Exception('The previous Mollie payment ended. Select MolliePayments again to retry.');
             }
             if ($status === 'paid') {
+                // No further creation is possible. Let post-commit mandate verification acquire its own lease.
+                if ($customer !== null) {
+                    $this->attempts->release($attempt['id'], $lease);
+                }
                 $this->reconcile($attempt['id'], $payment->id);
 
                 $boundAdapter = $this->di['mod_service']('Invoice', 'PayGateway')->getPaymentAdapter($gateway, $invoice);
@@ -115,12 +219,19 @@ final class PaymentService
     }
 
     /** Commit payment identity before any provider request; never allocate account credit. */
-    private function reserveAttempt(Invoice $invoice, PayGateway $gateway, string $environment, string $key): array
+    private function reserveAttempt(Invoice $invoice, PayGateway $gateway, string $environment, string $key, ?array $customer = null): array
     {
-        return $this->attempts->connection->transactional(function () use ($invoice, $gateway, $environment, $key): array {
+        return $this->attempts->connection->transactional(function () use ($invoice, $gateway, $environment, $key, $customer): array {
             $gatewayId = (int) $gateway->getId();
             $this->lockInvoice($invoice);
             $this->assertPayable($invoice);
+            if ($customer !== null) {
+                $identity = $this->di['loggedin_client'] ?? null;
+                if (!$identity instanceof Client || (int) $invoice->getClientId() !== (int) $customer['client_id']
+                    || (int) $identity->getId() !== (int) $invoice->getClientId()) {
+                    throw new \Payment_Exception('Invoice owner changed during onboarding.', [], 403);
+                }
+            }
             if (($existing = $this->attempts->active((int) $invoice->getId())) !== null) {
                 return $existing;
             }
@@ -151,7 +262,16 @@ final class PaymentService
                 ],
             ];
 
-            return $this->attempts->reserve([
+            $consent = [];
+            if ($customer !== null) {
+                $payload['sequenceType'] = 'first';
+                $payload['customerId'] = $customer['customer_id'];
+                $payload['metadata'] += ['customer_mapping' => $customer['id'], 'profile_id' => $customer['profile_id'], 'consent_version' => self::CONSENT_VERSION];
+                $consent = ['consent_version' => self::CONSENT_VERSION, 'consent_text' => self::CONSENT_TEXT,
+                    'consent_accepted_at' => time(), 'onboarding_status' => 'pending_payment'];
+            }
+
+            return $this->attempts->reserve($consent + [
                 'id' => $id, 'invoice_id' => $invoice->getId(), 'active_invoice' => $invoice->getId(),
                 'gateway_id' => $gatewayId, 'client_id' => $invoice->getClientId(), 'payment_id' => null,
                 'environment' => $environment, 'amount' => $amount, 'currency' => $currency,
@@ -182,6 +302,9 @@ final class PaymentService
             || (int) $attempt['gateway_id'] !== $gatewayId || $attempt['environment'] !== $environment
             || ($attempt['payment_id'] !== null && $attempt['payment_id'] !== $paymentId)) {
             throw new \Payment_Exception('Mollie callback does not match its local invoice, gateway or environment.', [], 409);
+        }
+        if ($attempt['consent_version'] !== null && !hash_equals($attempt['credential_fingerprint'], hash_hmac('sha256', $attempt['id'], $key))) {
+            throw new \Payment_Exception('Onboarding credential context changed. Operator reconciliation required.', [], 409);
         }
         $payment = $this->fetchPayment($paymentId, $key);
         $attempt = $this->synchronize($attempt, $payment);
@@ -219,6 +342,7 @@ final class PaymentService
             // Financial writes committed first. The host cron executes pending item tasks.
             $this->di['event_dispatcher']->dispatch(new AfterAdminInvoicePaymentReceivedEvent((int) $attempt['invoice_id']));
         }
+        (new MandateService($this->di, $this->clientFactory))->verify($attempt['id'], $payment);
     }
 
     private function settle(array $attempt, Transaction $tx): bool
@@ -307,6 +431,9 @@ final class PaymentService
             $changes = ['payment_id' => $payment->id, 'status' => $status, 'error' => null];
             if (in_array($status, self::TERMINAL_STATUSES, true)) {
                 $changes['active_invoice'] = null;
+                if ($current['consent_version'] !== null) {
+                    $changes['onboarding_status'] = 'payment_failed';
+                }
             }
             $this->attempts->update($attempt['id'], $changes);
 
@@ -316,11 +443,23 @@ final class PaymentService
 
     private function validatePayment(array $attempt, Payment $payment): string
     {
+        $payload = json_decode($attempt['request'], true, 512, JSON_THROW_ON_ERROR);
+        $first = ($payload['sequenceType'] ?? null) === 'first';
         $metadata = (array) ($payment->metadata ?? []);
+        $expectedMetadata = $payload['metadata'];
+        ksort($metadata);
+        ksort($expectedMetadata);
+        if ($first && ($attempt['consent_version'] === null || $attempt['consent_text'] === null || $attempt['consent_accepted_at'] === null
+            || $attempt['consent_version'] !== ($payload['metadata']['consent_version'] ?? null)
+            || $payment->customerId !== ($payload['customerId'] ?? null)
+            || !isset($payment->profileId) || $payment->profileId !== ($payload['metadata']['profile_id'] ?? null)
+            || $metadata !== $expectedMetadata)) {
+            throw new \Payment_Exception('Mollie first-payment authorization verification failed.', [], 409);
+        }
         $sequence = $payment->sequenceType instanceof \BackedEnum ? $payment->sequenceType->value : $payment->sequenceType;
         if (!preg_match('/^tr_[A-Za-z0-9]{1,60}$/D', $payment->id)
             || ($attempt['payment_id'] !== null && $attempt['payment_id'] !== $payment->id)
-            || $payment->mode !== $attempt['environment'] || $sequence !== 'oneoff'
+            || $payment->mode !== $attempt['environment'] || $sequence !== ($first ? 'first' : 'oneoff')
             || $payment->amount->currency !== $attempt['currency']
             || Amount::minor($payment->amount->value) !== Amount::minor($attempt['amount'])
             || ($metadata['attempt_id'] ?? null) !== $attempt['id']
@@ -362,7 +501,7 @@ final class PaymentService
             return $client->send(new CreatePaymentRequest(
                 description: $payload['description'], amount: new Money($payload['amount']['currency'], $payload['amount']['value']),
                 redirectUrl: $payload['redirectUrl'], webhookUrl: $payload['webhookUrl'],
-                metadata: $payload['metadata'], sequenceType: 'oneoff',
+                metadata: $payload['metadata'], sequenceType: $payload['sequenceType'], customerId: $payload['customerId'] ?? null,
             ));
         });
     }
@@ -491,6 +630,7 @@ final class PaymentService
         if (!$gateway instanceof PayGateway || $gateway->getGateway() !== 'MolliePayments') {
             throw new \Payment_Exception('Invalid MolliePayments gateway.');
         }
+        $this->di['em']->refresh($gateway);
         $environment = $gateway->isTestMode() ? 'test' : 'live';
         try {
             $adapter = $this->di['mod_service']('Invoice', 'PayGateway')->getPaymentAdapter($gateway);
