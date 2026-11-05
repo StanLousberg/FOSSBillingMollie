@@ -99,7 +99,7 @@ module/Molliepayments/Support/SdkUnavailableException.php
 module/Molliepayments/Api/Admin.php
 module/Molliepayments/Support/AdminTwigFactory.php
 module/Molliepayments/templates/admin/mod_molliepayments_settings.html.twig
-module/Molliepayments/assets/mollie-icon.png
+module/Molliepayments/icon.svg
 module/Molliepayments/tests/Unit/
 composer.json
 docs/INSTALLATION.md

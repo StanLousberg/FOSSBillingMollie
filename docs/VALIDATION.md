@@ -12,11 +12,9 @@ This is development evidence, not production certification. No Live requests, cr
 - Module SDK lock: `mollie/mollie-api-php v4.0.0`, isolated from host dependencies.
 - Initial local database: nine attempts (five paid, three canceled, one expired), no wallet columns and no `molliepayments_reserve` / `molliepayments_release` ledger entries. Thus no local reservations required release. Existing history was retained; all new financial fixtures used disposable customers/invoices.
 
-## Host contracts and architectural decision
+## Architecture reference
 
-`getTotalWithTax()` supplies invoice-level pricing/tax. Native `tryPayWithCredits()` / `payInvoiceWithCredits()` settle fully covered invoices and debit native credit. ServiceBalance and ClientBalanceRepository own balance summation/locking; ServiceTransaction owns callback rows, deduplication, claims and technical errors. ServicePayGateway owns decrypted keys and native callback/return URLs. Native invoice authorization remains mandatory.
-
-There is no supported authoritative partial-balance API. Checkout rejects charged items and previous allocations instead of reconstructing ledger balances. The remaining settlement glue calls native `addFunds()` for the verified receipt and matching invoice debit, then deferred `markAsPaid()`, inside the transaction containing the attempt guard. This is necessary because native full-credit payment dispatches events/tasks before an outer transaction commits, and native per-item charging can differ from invoice-level tax rounding. No wallet reservation/release, available-credit calculation or partial allocation service remains. Proposed host APIs are documented separately.
+The native-service boundaries and reason for the atomic settlement bridge are documented in [PAYMENTS.md](PAYMENTS.md#checkout-and-callbacks); generic host improvements remain [proposals only](FOSSBILLING_CORE_PROPOSALS.md).
 
 ## Automated execution
 
@@ -33,7 +31,7 @@ ddev exec env MOLLIEPAYMENTS_MYSQL_URL=mysql://db:db@db:3306/molliepayments_test
 
 The MariaDB test suite refuses any database name other than `molliepayments_test`. Only this separate database was recreated by integration fixtures. DDEV's development database was never reset.
 
-Final automated coverage: 152 unit/SQLite tests and eight MariaDB tests. The pinned baseline and current main both pass. Coverage includes independent checkout/webhook workers, checkout versus webhook races, unique active attempts, duplicate settlement guards, real rollback and injected MariaDB deadlock with a fresh retry, lost creation responses, key rotation/expiry, authorization, mismatched provider metadata, amount/currency checks, unavailable/unsafe checkout links, all payment statuses, native full-credit payment, unchanged partial credit, VAT/discount rounding and additive upgrades preserving legacy records. Native income reporting is exercised for terminal callbacks: no revenue, balance entries, payment events or activation tasks.
+Original refactor coverage: 152 unit/SQLite tests and eight MariaDB tests. The pinned baseline and current main both pass. Coverage includes independent checkout/webhook workers, checkout versus webhook races, unique active attempts, duplicate settlement guards, real rollback and injected MariaDB deadlock with a fresh retry, lost creation responses, key rotation/expiry, authorization, mismatched provider metadata, amount/currency checks, unavailable/unsafe checkout links, all payment statuses, native full-credit payment, unchanged partial credit, VAT/discount rounding and additive upgrades preserving legacy records. Native income reporting is exercised for terminal callbacks: no revenue, balance entries, payment events or activation tasks.
 
 The host's entire unrelated test suite was not run; the complete MolliePayments suite was run through each host's own Pest bootstrap. PostgreSQL was not tested.
 
@@ -74,3 +72,28 @@ Native full-credit payment was also exercised in the existing local installation
 5. Composer installation in temporary host copies initially failed because DDEV disables `proc_open`. Repeated it using CLI-only `php -d disable_functions= /usr/local/bin/composer install`; both lockfile installations and tests passed. No persistent PHP or core configuration was changed.
 
 Raw local test logs are under DDEV `/tmp/mp-*.log`. The initial source snapshot and temporary evidence scripts are under host `/tmp/mp-before-refactor/`. Neither is a committed credential store. Legacy migration policy and required administrative reconciliation are in [PAYMENTS.md](PAYMENTS.md#legacy-wallet-transition).
+
+## Cleanup review and regression run — starting at `7374061`
+
+The clean starting branch was `refactor/lean-molliepayments-adapter`. Baseline syntax, Composer validation/lockfile installation, PHP-CS-Fixer and the complete suite passed (160 tests, 815 assertions). Official upstream main was rechecked at `09cb340c48c9b8a43b24c6f7e13b8b64a42e6f64`; the pinned/main compatibility matrix is unchanged.
+
+Audit decisions:
+
+- Retain the thin gateway, attempt entity/repository, money/URL/credential helpers and SDK factory: these are distinct security, persistence and test boundaries. There are no unused runtime services.
+- Retain atomic native settlement glue. Current core has no suitable atomic external-payment API; native full-credit payment still dispatches work before an outer commit. Preserve the attempt guard, lock order and invoice-level rounding.
+- Retain `AdminTwigFactory`: native `TwigLoader` still skips symlinked module templates. It now leaves already resolved native/theme loaders intact. Tests exercise real native symlink/icon resolution, real Twig filters, theme precedence, unrelated-template absence and permission discovery with an already initialized factory.
+- Retain the small runtime compatibility guard, including the four-argument deferred-event signature check. Retain `SdkUnavailableException` because connection tests distinguish a missing SDK from provider/network failures without exposing raw errors.
+- Retain the three short CLI scripts. A dispatcher/bootstrap abstraction would add indirection to a few shared initialization lines without improving the operational commands.
+- Remove only the redundant module PNG and wallet fixture helper. Preserve the gateway PNG byte-for-byte (SHA-256 asserted by tests) and the existing SVG wrapper. Share fixture helpers in `PaymentContext.php`; organize tests as `CheckoutTest`, `WebhookTest` and `NativeBalanceTest`, with MariaDB workers separate.
+
+`PaymentService` keeps checkout preparation, network creation/retrieval, locked verification, callbacks and settlement in the same class. The cleanup removes a URL forwarding method, unused gateway tuple data, repeated status parsing, gateway re-resolution and repeated repository/service lookups. Verification before and after locking, changed-invoice checks and legacy-history rejection remain deliberately separate. No state-machine, schema, pricing or accounting outcome changed.
+
+Post-cleanup automated results: 154 unit/SQLite tests (761 assertions) and eight MariaDB integration tests (61 assertions), **162 tests / 822 assertions total**, passing on the pinned baseline, current main and the local host. Syntax, Composer validation/installation and coding standards pass. No existing regression assertions or test cases were discarded. Logs use the DDEV `/tmp/mp-cleanup-*.log` prefix.
+
+Fresh real Test-mode regression: disposable invoice 20, payment `tr_YZVxsVpotJNVeT5whM9ZJ`, €25.00. Created after adding €10 account credit; open checkout was reused twice, including after another €1 was added. Hosted iDEAL Test forms were submitted over HTTP and the browser return was not followed. Provider GET confirmed paid; the public webhook produced native transaction 22 (`processed`, €25.00), invoice paid, one +€25 transaction credit, one -€25 invoice debit and a matching settlement guard with no error. Account balance remained €11. Two public HTTP redeliveries returned 200 and created only zero-valued duplicate audit rows; no additional financial entries. Native invoice-item execution activated the disposable custom order.
+
+Before/after checksums of every pre-existing row in `invoice`, `client_balance`, `transaction`, `molliepayments_attempt` and `client_order` matched. Only disposable fixtures were added; no prior attempts, records or columns were removed. The temporary evidence harness and fixture state were not committed.
+
+Fix/retest: fixture consolidation initially missed the helper's `Amount` import; restored it and reran the affected balance/logo tests, then full suites on both host revisions. The temporary real-payment harness initially compared an SDK status enum with a string; switched it to SDK `isPaid()` and repeated provider/database verification, duplicate delivery and activation. Neither failure required changing financial expectations or skipping tests.
+
+The earlier real-provider terminal-state and interactive-browser gaps listed above remain **not verified** in this cleanup run. The real regression used hosted HTTP forms, not an interactive browser. Canceled, failed, expired, pending and authorized accounting remains covered by provider fakes and native database tests. No Live keys were used or overwritten; no core files were modified. The result is committed locally only, with no push or PR.

@@ -5,7 +5,7 @@ declare(strict_types=1);
 use Box\Mod\Invoice\Entity\Invoice;
 use Doctrine\DBAL\Tools\DsnParser;
 
-require_once dirname(__DIR__) . '/WalletContext.php';
+require_once dirname(__DIR__) . '/PaymentContext.php';
 
 beforeEach(function (): void {
     if (!getenv('MOLLIEPAYMENTS_MYSQL_URL')) {
@@ -94,7 +94,7 @@ test('MariaDB simultaneous checkouts preserve one reservation and provider creat
     $check = mollieMariaContext(false);
     expect((int) $check->db->fetchOne('SELECT COUNT(*) FROM molliepayments_attempt'))->toBe(1)
         ->and((int) $check->db->fetchOne("SELECT COUNT(*) FROM client_balance WHERE type = 'molliepayments_reserve'"))->toBe(0)
-        ->and(mollieWallet($check))->toBe(1000);
+        ->and(mollieBalance($check))->toBe(1000);
 });
 
 test('MariaDB duplicate webhook workers settle once and leave existing credit untouched', function (): void {
@@ -110,7 +110,7 @@ test('MariaDB duplicate webhook workers settle once and leave existing credit un
     };
     mollieMariaWorkers([$webhook, $webhook]);
     $check = mollieMariaContext(false);
-    expect($check->invoice->getStatus())->toBe('paid')->and(mollieWallet($check))->toBe(1000)
+    expect($check->invoice->getStatus())->toBe('paid')->and(mollieBalance($check))->toBe(1000)
         ->and((int) $check->db->fetchOne("SELECT COUNT(*) FROM client_balance WHERE type = 'transaction'"))->toBe(1);
 });
 
@@ -136,7 +136,7 @@ test('MariaDB competing invoices leave native credit untouched', function (): vo
     $check = mollieMariaContext(false);
     expect((int) $check->db->fetchOne('SELECT COUNT(*) FROM molliepayments_attempt'))->toBe(2)
         ->and((int) $check->db->fetchOne("SELECT COUNT(*) FROM client_balance WHERE type LIKE 'molliepayments_%'"))->toBe(0)
-        ->and(mollieWallet($check))->toBe(1000);
+        ->and(mollieBalance($check))->toBe(1000);
 });
 
 test('MariaDB concurrent cancellation does not alter credit', function (): void {
@@ -152,7 +152,7 @@ test('MariaDB concurrent cancellation does not alter credit', function (): void 
     };
     mollieMariaWorkers([$cancel, $cancel]);
     $check = mollieMariaContext(false);
-    expect(mollieWallet($check))->toBe(1000)->and($check->invoice->getStatus())->toBe('unpaid')
+    expect(mollieBalance($check))->toBe(1000)->and($check->invoice->getStatus())->toBe('unpaid')
         ->and((int) $check->db->fetchOne("SELECT COUNT(*) FROM client_balance WHERE type = 'molliepayments_release'"))->toBe(0)
         ->and((int) $check->db->fetchOne("SELECT COUNT(*) FROM `transaction` WHERE status = 'error'"))->toBe(0);
 });
@@ -183,7 +183,7 @@ test('MariaDB checkout and paid webhook converge on one accounting outcome', fun
         },
     ]);
     $check = mollieMariaContext(false);
-    expect($check->invoice->getStatus())->toBe('paid')->and(mollieWallet($check))->toBe(1000)
+    expect($check->invoice->getStatus())->toBe('paid')->and(mollieBalance($check))->toBe(1000)
         ->and((int) $check->db->fetchOne("SELECT COUNT(*) FROM client_balance WHERE type = 'transaction'"))->toBe(1);
 });
 
@@ -200,7 +200,7 @@ test('MariaDB timeout recovery leaves credit untouched and the durable creation 
     $ctx->db->close();
     $retry = mollieMariaContext(false);
     $retry->payments->checkout($retry->invoice->getId(), $retry->gateway->getId());
-    expect(mollieAttempt($retry)['id'])->toBe($id)->and(mollieWallet($retry))->toBe(1000)
+    expect(mollieAttempt($retry)['id'])->toBe($id)->and(mollieBalance($retry))->toBe(1000)
         ->and((int) $retry->db->fetchOne("SELECT COUNT(*) FROM client_balance WHERE type = 'molliepayments_reserve'"))->toBe(0);
 });
 
@@ -213,12 +213,12 @@ test('MariaDB database deadlock errors roll back settlement and allow a fresh ve
     });
     $ctx->status = 'paid';
     expect(fn () => mollieWebhook($ctx))->toThrow(Payment_Exception::class, 'needs reconciliation')
-        ->and(mollieWallet($ctx))->toBe(1000);
+        ->and(mollieBalance($ctx))->toBe(1000);
     $ctx->db->close();
     $retry = mollieMariaContext(false);
     $retry->status = 'paid';
     mollieWebhook($retry);
-    expect($retry->invoice->getStatus())->toBe('paid')->and(mollieWallet($retry))->toBe(1000);
+    expect($retry->invoice->getStatus())->toBe('paid')->and(mollieBalance($retry))->toBe(1000);
 });
 
 test('MariaDB upgrades retain legacy wallet columns and history without releasing funds', function (): void {
@@ -232,6 +232,6 @@ test('MariaDB upgrades retain legacy wallet columns and history without releasin
     $before = mollieAttempt($ctx);
     $ctx->services['molliepayments']->update();
     expect(fn () => $ctx->payments->checkout($ctx->invoice->getId(), $ctx->gateway->getId()))->toThrow(Payment_Exception::class, 'Legacy account-credit attempt')
-        ->and(mollieAttempt($ctx))->toBe($before)->and(mollieWallet($ctx))->toBe(0)
+        ->and(mollieAttempt($ctx))->toBe($before)->and(mollieBalance($ctx))->toBe(0)
         ->and((int) $ctx->db->fetchOne('SELECT COUNT(*) FROM client_balance'))->toBe(2);
 });

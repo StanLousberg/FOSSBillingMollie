@@ -6,9 +6,8 @@ use Box\Mod\Invoice\Entity\Invoice;
 use Box\Mod\Invoice\Entity\InvoiceItem;
 use Box\Mod\Invoice\Entity\Transaction;
 use Box\Mod\Molliepayments\Support\Amount;
-use Box\Mod\Molliepayments\Support\CheckoutUrl;
 
-require_once dirname(__DIR__) . '/WalletContext.php';
+require_once dirname(__DIR__) . '/PaymentContext.php';
 
 test('checkout leaves existing native credit untouched and charges the full invoice', function (string $credit): void {
     $ctx = molliePaymentContext();
@@ -17,11 +16,11 @@ test('checkout leaves existing native credit untouched and charges the full invo
     mollieCredit($ctx, $credit);
     $ctx->payments->checkout($ctx->invoice->getId(), $ctx->gateway->getId());
     expect($ctx->payload['amount']['value'])->toBe('25.00')
-        ->and(mollieWallet($ctx))->toBe(Amount::minor($credit));
+        ->and(mollieBalance($ctx))->toBe(Amount::minor($credit));
     $ctx->status = 'paid';
     mollieWebhook($ctx);
     mollieWebhook($ctx);
-    expect(mollieWallet($ctx))->toBe(Amount::minor($credit))
+    expect(mollieBalance($ctx))->toBe(Amount::minor($credit))
         ->and($ctx->invoice->getStatus())->toBe(Invoice::STATUS_PAID)
         ->and((int) $ctx->db->fetchOne("SELECT COUNT(*) FROM client_balance WHERE type LIKE 'molliepayments_%'"))->toBe(0);
 })->with(['0.00', '10.00', '25.00', '30.00']);
@@ -33,7 +32,7 @@ test('native account credit independently pays fully covered invoices', function
     mollieCredit($ctx, $credit);
     expect($ctx->invoiceService->payInvoiceWithCredits($ctx->invoice))->toBeTrue()
         ->and($ctx->invoice->getStatus())->toBe(Invoice::STATUS_PAID)
-        ->and(mollieWallet($ctx))->toBe($remaining)
+        ->and(mollieBalance($ctx))->toBe($remaining)
         ->and($ctx->requests)->toBeEmpty()
         ->and((int) $ctx->db->fetchOne('SELECT COUNT(*) FROM molliepayments_attempt'))->toBe(0);
 })->with([['25.00', 0], ['30.00', 500]]);
@@ -42,29 +41,29 @@ test('terminal callbacks leave credit untouched without a technical error', func
     $ctx = molliePaymentContext();
     mollieCredit($ctx, '10.00');
     $ctx->payments->checkout($ctx->invoice->getId(), $ctx->gateway->getId());
-    expect(mollieWallet($ctx))->toBe(1000);
+    expect(mollieBalance($ctx))->toBe(1000);
     $ctx->status = $status;
     $tx = mollieWebhook($ctx);
-    expect(mollieWallet($ctx))->toBe(1000)
+    expect(mollieBalance($ctx))->toBe(1000)
         ->and($tx->getStatus())->toBe(Transaction::STATUS_PROCESSED)->and($tx->getAmount())->toBe('0.00')
         ->and($tx->getTxnStatus())->toBe($status)->and($tx->getError())->toBeNull()
         ->and($ctx->invoice->getStatus())->toBe(Invoice::STATUS_UNPAID);
     mollieWebhook($ctx);
-    expect(mollieWallet($ctx))->toBe(1000)
+    expect(mollieBalance($ctx))->toBe(1000)
         ->and((int) $ctx->db->fetchOne("SELECT COUNT(*) FROM client_balance WHERE type LIKE 'molliepayments_%'"))->toBe(0);
 })->with(['canceled', 'failed', 'expired']);
 
-test('new wallet funds do not change an already open provider payment', function (): void {
+test('new account credit does not change an already open provider payment', function (): void {
     $ctx = molliePaymentContext();
     $ctx->payments->checkout($ctx->invoice->getId(), $ctx->gateway->getId());
     mollieCredit($ctx, '10.00');
     $url = $ctx->payments->checkout($ctx->invoice->getId(), $ctx->gateway->getId());
     expect($url)->toContain('mollie.com/checkout/')
         ->and($ctx->payload['amount']['value'])->toBe('12.34')
-        ->and(mollieWallet($ctx))->toBe(1000)->and(count($ctx->requests))->toBe(2);
+        ->and(mollieBalance($ctx))->toBe(1000)->and(count($ctx->requests))->toBe(2);
     $ctx->status = 'paid';
     mollieWebhook($ctx);
-    expect(mollieWallet($ctx))->toBe(1000);
+    expect(mollieBalance($ctx))->toBe(1000);
 });
 
 test('settlement rollback leaves native credit and provider identity intact', function (): void {
@@ -74,7 +73,7 @@ test('settlement rollback leaves native credit and provider identity intact', fu
     $ctx->invoiceService->shouldReceive('markAsPaid')->once()->andThrow(new RuntimeException('Accounting failed'));
     $ctx->status = 'paid';
     expect(fn () => mollieWebhook($ctx))->toThrow(Payment_Exception::class, 'needs reconciliation')
-        ->and(mollieWallet($ctx))->toBe(1000)
+        ->and(mollieBalance($ctx))->toBe(1000)
         ->and((int) $ctx->db->fetchOne("SELECT COUNT(*) FROM client_balance WHERE type = 'transaction'"))->toBe(0);
 });
 
@@ -84,7 +83,7 @@ test('prior native invoice allocations are rejected without interpreting their b
     $ctx->clientService->addFunds($ctx->client, '-10.00', 'Previously allocated credit', ['type' => 'invoice', 'rel_id' => $ctx->invoice->getId()]);
     expect(fn () => $ctx->payments->checkout($ctx->invoice->getId(), $ctx->gateway->getId()))
         ->toThrow(Payment_Exception::class, 'allocations require reconciliation')
-        ->and($ctx->requests)->toBeEmpty()->and(mollieWallet($ctx))->toBe(0);
+        ->and($ctx->requests)->toBeEmpty()->and(mollieBalance($ctx))->toBe(0);
 });
 
 test('an unallocated earlier receipt requires a specific reconciliation error', function (): void {
@@ -110,18 +109,8 @@ test('native invoice total includes VAT and discounts without splitting credit',
     expect($ctx->payload['amount']['value'])->toBe('24.20');
     $ctx->status = 'paid';
     mollieWebhook($ctx);
-    expect(mollieWallet($ctx))->toBe(1000);
+    expect(mollieBalance($ctx))->toBe(1000);
 });
-
-test('trusted checkout variants remain HTTPS and are limited to documented Mollie routes', function (string $url): void {
-    expect(CheckoutUrl::validate($url))->toBe($url);
-})->with(['https://www.mollie.com/checkout/select-method/example', 'https://www.mollie.com/checkout/issuer/select/ideal/example', 'https://www.mollie.com/payscreen/select-method/example', 'https://www.mollie.com/checkout']);
-
-test('unsafe checkout links never become redirects', function (?string $url): void {
-    expect(fn () => CheckoutUrl::validate($url))->toThrow(Payment_Exception::class);
-})->with([null, '', 'http://www.mollie.com/checkout/x', 'javascript:alert(1)', 'https://www.mollie.com.attacker.invalid/checkout/x',
-    'https://www.mollie.com@attacker.invalid/checkout/x', 'https://user@www.mollie.com/checkout/x', 'https://www.mollie.com:443/checkout/x',
-    'https://www.mollie.com/dashboard/x', 'https://www.mollie.com/checkout/x#fragment', 'https://www.mollie.com/checkout/%0a', 'https://www.mollie.com\\@attacker.invalid/checkout/x']);
 
 test('an open payment without its checkout link remains reserved and does not create a replacement', function (): void {
     $ctx = molliePaymentContext();
@@ -133,7 +122,7 @@ test('an open payment without its checkout link remains reserved and does not cr
         return $response;
     };
     expect(fn () => $ctx->payments->checkout($ctx->invoice->getId(), $ctx->gateway->getId()))->toThrow(Payment_Exception::class, 'no longer provides a checkout link')
-        ->and(mollieWallet($ctx))->toBe(1000)
+        ->and(mollieBalance($ctx))->toBe(1000)
         ->and(count($ctx->requests))->toBe(2)->and($ctx->requests[1]->getMethod())->toBe('GET');
 });
 
@@ -160,7 +149,7 @@ test('orphaned legacy reservation ledger entries block checkout without modifyin
     $ctx->clientService->addFunds($ctx->client, '-10.00', 'Historical reservation fixture', ['type' => 'molliepayments_reserve', 'rel_id' => $ctx->invoice->getId()]);
     expect(fn () => $ctx->payments->checkout($ctx->invoice->getId(), $ctx->gateway->getId()))
         ->toThrow(Payment_Exception::class, 'Legacy account-credit history')
-        ->and(mollieWallet($ctx))->toBe(0)
+        ->and(mollieBalance($ctx))->toBe(0)
         ->and($ctx->requests)->toBeEmpty()
         ->and((int) $ctx->db->fetchOne('SELECT COUNT(*) FROM client_balance'))->toBe(2);
 });

@@ -5,6 +5,7 @@ declare(strict_types=1);
 namespace Box\Mod\Molliepayments;
 
 use Box\Mod\Client\Entity\Client;
+use Box\Mod\Client\Entity\ClientBalance;
 use Box\Mod\Invoice\Entity\Invoice;
 use Box\Mod\Invoice\Entity\InvoiceItem;
 use Box\Mod\Invoice\Entity\PayGateway;
@@ -24,6 +25,8 @@ use Mollie\Api\Resources\Payment;
 /** Checkout and authenticated reconciliation; the host remains the accounting authority. */
 final class PaymentService
 {
+    private const TERMINAL_STATUSES = ['failed', 'canceled', 'expired'];
+
     private readonly AttemptRepository $attempts;
 
     /** @param \Closure(string): MollieApiClient|null $clientFactory */
@@ -53,57 +56,12 @@ final class PaymentService
     {
         $invoice = $this->invoice($invoiceId);
         $this->invoiceService()->checkInvoiceAuth($invoice, InvoiceOperation::PAYMENT);
-        [$gateway, , $environment, $key] = $this->gateway($gatewayId);
+        [$gateway, $environment, $key] = $this->gateway($gatewayId);
         if (!$gateway->isEnabled() || !$gateway->isAllowSingle()) {
             throw new \Payment_Exception('MolliePayments is not enabled for one-time payments.');
         }
 
-        $attempt = $this->attempts->connection->transactional(function () use ($invoice, $gatewayId, $environment, $key): array {
-            $this->lockInvoice($invoice);
-            $this->assertPayable($invoice);
-            if (($existing = $this->attempts->active((int) $invoice->getId())) !== null) {
-                return $existing;
-            }
-            $amount = $this->outstanding($invoice);
-            // All callbacks originate in the host gateway service, never request input.
-            $boundAdapter = $this->di['mod_service']('Invoice', 'PayGateway')->getPaymentAdapter(
-                $invoiceGateway = $this->di['em']->getRepository(PayGateway::class)->find($gatewayId), $invoice
-            );
-            // The native return document does not start a session when Strict
-            // cookies are withheld on the cross-site navigation from Mollie.
-            $redirect = $this->trustedHostUrl((string) $boundAdapter->getParam('return_url'));
-            $webhook = $this->trustedHostUrl((string) $boundAdapter->getParam('notify_url'));
-            $id = bin2hex(random_bytes(16));
-            $currency = Amount::currency((string) $invoice->getCurrency());
-            $accepted = $this->di['mod_service']('Invoice', 'PayGateway')->getAcceptedCurrencies($invoiceGateway);
-            if (!in_array($currency, $accepted, true)) {
-                throw new \Payment_Exception('This currency is not accepted by MolliePayments.');
-            }
-            $payload = [
-                'description' => mb_substr($this->invoiceService()->getPaymentInvoice($invoice)->getTitle(), 0, 255),
-                'amount' => ['currency' => $currency, 'value' => $amount],
-                'sequenceType' => 'oneoff',
-                'redirectUrl' => $redirect,
-                'webhookUrl' => $webhook . '&attempt_id=' . $id,
-                'metadata' => [
-                    'attempt_id' => $id, 'invoice_id' => (string) $invoice->getId(),
-                    'gateway_id' => (string) $gatewayId, 'client_id' => (string) $invoice->getClientId(),
-                    'environment' => $environment,
-                ],
-            ];
-
-            $attempt = $this->attempts->reserve([
-                'id' => $id, 'invoice_id' => $invoice->getId(), 'active_invoice' => $invoice->getId(),
-                'gateway_id' => $gatewayId, 'client_id' => $invoice->getClientId(), 'payment_id' => null,
-                'environment' => $environment, 'amount' => $amount, 'currency' => $currency,
-                'status' => 'creating', 'idempotency_key' => $id,
-                'credential_fingerprint' => hash_hmac('sha256', $id, $key),
-                'request' => json_encode($payload, JSON_THROW_ON_ERROR),
-                'created_at' => time(), 'updated_at' => time(), 'lease_until' => 0,
-            ]);
-
-            return $attempt;
-        });
+        $attempt = $this->reserveAttempt($invoice, $gateway, $environment, $key);
 
         $this->assertNoLegacyCredit($attempt);
         if ((int) $attempt['gateway_id'] !== $gatewayId || $attempt['environment'] !== $environment) {
@@ -129,7 +87,7 @@ final class PaymentService
             }
             $attempt = $this->synchronize($attempt, $payment);
             $status = $attempt['status'];
-            if (in_array($status, ['failed', 'canceled', 'expired'], true)) {
+            if (in_array($status, self::TERMINAL_STATUSES, true)) {
                 // The next checkout may reserve a fresh attempt, after authenticated finality.
                 throw new \Payment_Exception('The previous Mollie payment ended. Select MolliePayments again to retry.');
             }
@@ -150,10 +108,59 @@ final class PaymentService
                 throw new \Payment_Exception('Mollie checkout has expired. Wait for the final payment status before retrying.');
             }
 
-            return $this->checkoutUrl($payment);
+            return Support\CheckoutUrl::validate($payment->getCheckoutUrl());
         } finally {
             $this->attempts->release($attempt['id'], $lease);
         }
+    }
+
+    /** Commit payment identity before any provider request; never allocate account credit. */
+    private function reserveAttempt(Invoice $invoice, PayGateway $gateway, string $environment, string $key): array
+    {
+        return $this->attempts->connection->transactional(function () use ($invoice, $gateway, $environment, $key): array {
+            $gatewayId = (int) $gateway->getId();
+            $this->lockInvoice($invoice);
+            $this->assertPayable($invoice);
+            if (($existing = $this->attempts->active((int) $invoice->getId())) !== null) {
+                return $existing;
+            }
+            $amount = $this->outstanding($invoice);
+            // All callbacks originate in the host gateway service, never request input.
+            $gatewayService = $this->di['mod_service']('Invoice', 'PayGateway');
+            $boundAdapter = $gatewayService->getPaymentAdapter($gateway, $invoice);
+            // The native return document does not start a session when Strict
+            // cookies are withheld on the cross-site navigation from Mollie.
+            $redirect = $this->trustedHostUrl((string) $boundAdapter->getParam('return_url'));
+            $webhook = $this->trustedHostUrl((string) $boundAdapter->getParam('notify_url'));
+            $id = bin2hex(random_bytes(16));
+            $currency = Amount::currency((string) $invoice->getCurrency());
+            $accepted = $gatewayService->getAcceptedCurrencies($gateway);
+            if (!in_array($currency, $accepted, true)) {
+                throw new \Payment_Exception('This currency is not accepted by MolliePayments.');
+            }
+            $payload = [
+                'description' => mb_substr($this->invoiceService()->getPaymentInvoice($invoice)->getTitle(), 0, 255),
+                'amount' => ['currency' => $currency, 'value' => $amount],
+                'sequenceType' => 'oneoff',
+                'redirectUrl' => $redirect,
+                'webhookUrl' => $webhook . '&attempt_id=' . $id,
+                'metadata' => [
+                    'attempt_id' => $id, 'invoice_id' => (string) $invoice->getId(),
+                    'gateway_id' => (string) $gatewayId, 'client_id' => (string) $invoice->getClientId(),
+                    'environment' => $environment,
+                ],
+            ];
+
+            return $this->attempts->reserve([
+                'id' => $id, 'invoice_id' => $invoice->getId(), 'active_invoice' => $invoice->getId(),
+                'gateway_id' => $gatewayId, 'client_id' => $invoice->getClientId(), 'payment_id' => null,
+                'environment' => $environment, 'amount' => $amount, 'currency' => $currency,
+                'status' => 'creating', 'idempotency_key' => $id,
+                'credential_fingerprint' => hash_hmac('sha256', $id, $key),
+                'request' => json_encode($payload, JSON_THROW_ON_ERROR),
+                'created_at' => time(), 'updated_at' => time(), 'lease_until' => 0,
+            ]);
+        });
     }
 
     /** The host has already acquired this transaction's processing claim. */
@@ -167,7 +174,7 @@ final class PaymentService
         }
         $attempt = $this->attempts->find($attemptId);
         $this->assertNoLegacyCredit($attempt);
-        [, , $environment, $key] = $this->gateway($gatewayId);
+        [, $environment, $key] = $this->gateway($gatewayId);
         $tx = $this->di['em']->getRepository(Transaction::class)->find($transactionId);
         if (!$tx instanceof Transaction || (int) $tx->getGateway()?->getId() !== $gatewayId
             || (int) $tx->getInvoice()?->getId() !== (int) $attempt['invoice_id']
@@ -184,7 +191,7 @@ final class PaymentService
                 $current = $this->attempts->lock($attempt['id']);
                 $this->di['em']->refresh($tx);
                 if ($tx->getStatus() !== Transaction::STATUS_PROCESSED && $current['status'] !== 'paid') {
-                    $terminal = in_array($current['status'], ['failed', 'canceled', 'expired'], true);
+                    $terminal = in_array($current['status'], self::TERMINAL_STATUSES, true);
                     $tx->setTxnId($current['payment_id']);
                     $tx->setTxnStatus($current['status']);
                     $tx->setCurrency($current['currency']);
@@ -251,13 +258,14 @@ final class PaymentService
             $this->di['mod_service']('Client', 'Balance')->getClientBalanceForUpdate($client);
             $gateway = $this->di['em']->getRepository(PayGateway::class)->find((int) $attempt['gateway_id']);
             $invoice->setGateway($gateway);
-            $this->di['mod_service']('Client')->addFunds($client, $attempt['amount'], 'Mollie payment ' . $attempt['payment_id'], [
+            $clientService = $this->di['mod_service']('Client');
+            $clientService->addFunds($client, $attempt['amount'], 'Mollie payment ' . $attempt['payment_id'], [
                 'type' => 'transaction', 'rel_id' => $tx->getId(),
             ]);
             // Mirror native tryPayWithCredits: debit the authoritative invoice
             // balance once, then mark paid without per-item charging. Per-unit
             // tax rounding can otherwise differ from the host invoice total.
-            $this->di['mod_service']('Client')->addFunds(
+            $clientService->addFunds(
                 $client, Amount::decimal(-Amount::minor($attempt['amount'])),
                 'Payment for invoice #' . $invoice->getId(),
                 ['type' => 'invoice', 'rel_id' => $invoice->getId()],
@@ -287,18 +295,17 @@ final class PaymentService
             $invoice = $this->invoice((int) $attempt['invoice_id']);
             $this->lockInvoice($invoice);
             $current = $this->attempts->lock($attempt['id']);
-            $this->validatePayment($current, $payment);
-            $status = $this->status($payment);
+            $status = $this->validatePayment($current, $payment);
             // A delayed pre-payment GET must never overwrite a verified paid state.
             if ($current['status'] === 'paid' && $status !== 'paid') {
                 return $current;
             }
             // Terminal records stay immutable unless actual money arrived later.
-            if (in_array($current['status'], ['failed', 'expired', 'canceled'], true) && $status !== 'paid') {
+            if (in_array($current['status'], self::TERMINAL_STATUSES, true) && $status !== 'paid') {
                 return $current;
             }
             $changes = ['payment_id' => $payment->id, 'status' => $status, 'error' => null];
-            if (in_array($status, ['failed', 'expired', 'canceled'], true)) {
+            if (in_array($status, self::TERMINAL_STATUSES, true)) {
                 $changes['active_invoice'] = null;
             }
             $this->attempts->update($attempt['id'], $changes);
@@ -307,7 +314,7 @@ final class PaymentService
         });
     }
 
-    private function validatePayment(array $attempt, Payment $payment): void
+    private function validatePayment(array $attempt, Payment $payment): string
     {
         $metadata = (array) ($payment->metadata ?? []);
         $sequence = $payment->sequenceType instanceof \BackedEnum ? $payment->sequenceType->value : $payment->sequenceType;
@@ -323,13 +330,15 @@ final class PaymentService
             || ($metadata['environment'] ?? null) !== $attempt['environment']) {
             throw new \Payment_Exception('Mollie payment verification failed. Reconcile the saved attempt.', [], 409);
         }
-        $this->status($payment);
-        if ($this->status($payment) === 'paid' && !$payment->isPaid()) {
+        $status = $this->status($payment);
+        if ($status === 'paid' && !$payment->isPaid()) {
             throw new \Payment_Exception('Mollie payment has no confirmed paid timestamp.', [], 409);
         }
         if ($payment->hasRefunds() || $payment->hasChargebacks()) {
             throw new \Payment_Exception('Refunded or charged-back Mollie payments require manual reconciliation.', [], 409);
         }
+
+        return $status;
     }
 
     private function status(Payment $payment): string
@@ -434,20 +443,19 @@ final class PaymentService
         }
         // No outstanding-balance API exists in the tested host. Detect prior
         // allocations, but never interpret ledger amounts or reconstruct a balance.
-        $allocations = $this->di['em']->getRepository(\Box\Mod\Client\Entity\ClientBalance::class)->count([
-            'client' => $client, 'type' => 'invoice', 'relId' => (string) $invoice->getId(),
-        ]);
+        $balances = $this->di['em']->getRepository(ClientBalance::class);
+        $allocationReference = ['client' => $client, 'relId' => (string) $invoice->getId()];
+        $allocations = $balances->count([
+            'type' => 'invoice',
+        ] + $allocationReference);
         foreach (['molliepayments_reserve', 'molliepayments_release'] as $legacyType) {
-            if ($this->di['em']->getRepository(\Box\Mod\Client\Entity\ClientBalance::class)->count([
-                'client' => $client, 'type' => $legacyType, 'relId' => (string) $invoice->getId(),
-            ]) > 0) {
+            if ($balances->count(['type' => $legacyType] + $allocationReference) > 0) {
                 throw new \Payment_Exception('Legacy account-credit history requires manual reconciliation before Mollie checkout.', [], 409);
             }
         }
-        $transactions = $this->di['em']->getRepository(Transaction::class)->findBy(['invoice' => $invoice]);
+        $transactions = $this->di['em']->getRepository(Transaction::class)->findBy(['invoice' => $invoice, 'status' => Transaction::STATUS_PROCESSED]);
         foreach ($transactions as $transaction) {
-            if ($transaction->getStatus() === Transaction::STATUS_PROCESSED
-                && ($transaction->getAmount() === null || Amount::minor($transaction->getAmount()) !== 0)) {
+            if ($transaction->getAmount() === null || Amount::minor($transaction->getAmount()) !== 0) {
                 throw new \Payment_Exception('Previous invoice payments require reconciliation before Mollie checkout.');
             }
         }
@@ -494,7 +502,7 @@ final class PaymentService
             throw new \Payment_Exception('MolliePayments saved credentials could not be loaded.');
         }
 
-        return [$gateway, $adapter, $environment, $key];
+        return [$gateway, $environment, $key];
     }
 
     private function trustedHostUrl(string $url): string
@@ -509,10 +517,5 @@ final class PaymentService
         }
 
         return $url;
-    }
-
-    private function checkoutUrl(Payment $payment): string
-    {
-        return Support\CheckoutUrl::validate($payment->getCheckoutUrl());
     }
 }

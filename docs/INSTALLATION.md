@@ -1,223 +1,104 @@
-# Installation and development setup
+# Development installation
 
-> **Development only.** MolliePayments implements one-time Checkout and authenticated invoice settlement for development validation. Subscriptions remain unsupported. Complete the [manual Test-mode payment and webhook procedure](PAYMENTS.md) before considering deployment; there is no production-ready release.
+There is no supported production release. Use a disposable development host and Mollie Test mode. Payment behavior and recovery are documented in [PAYMENTS.md](PAYMENTS.md); test commands, evidence and unverified scenarios are in [VALIDATION.md](VALIDATION.md).
 
-## 1. Prerequisites
+## Supported host and dependencies
 
-- Ubuntu, WSL2, Linux or macOS; a clean FOSSBilling development installation.
-- PHP **8.3+** with FOSSBilling's required PHP extensions; specifically, cURL and OpenSSL for the Mollie PHP SDK.
-- Composer 2 and Git.
-- Docker and [DDEV](https://ddev.com/) for the recommended local web environment.
-- A separate, disposable development database. Never use production customer data or keys.
+- PHP 8.3+ with FOSSBilling's required extensions, including cURL, JSON, mbstring and OpenSSL for this adapter.
+- Composer 2, Git, Docker and DDEV for the recommended local setup.
+- FOSSBilling development baseline `97bb583dd681e311e2d10fe8c648095f2a479878` (preview version `0.0.1`). CI also tests current upstream `main`.
 
-The source code is split across **two independent repositories**. You should not fork or edit FOSSBilling core in order to develop MolliePayments.
+Published 0.8.9 is unsupported; a greater version number does not guarantee compatibility. The manifest identifies preview version `0.0.1`. Encrypted gateway secrets, masking/blank updates, invoice authorization/locking, transaction claims, deferred events and module-scoped schema synchronization are required. The small runtime contract guard rejects incompatible builds; never patch core or add a plaintext fallback.
 
-## 2. Create a workspace (first-time setup)
+The official `mollie/mollie-api-php:^4.0` dependency is isolated in this module. Keep `composer.lock` committed and use `composer install`, not `composer update`, for reproducible installations. Never change the host's root Composer dependencies for MolliePayments.
 
-The following commands use `~/dev/MolliePayments-workspace` as the example directory.
+## Workspace
+
+Use two separate repositories. Reuse an existing workspace; do not clone or recreate links over existing paths.
+
+```text
+~/dev/MolliePayments-workspace/FOSSBilling/                         external host
+~/dev/MolliePayments-workspace/FOSSBilling/.local/MolliePayments/   this repository
+```
+
+For a new workspace:
 
 ```bash
 mkdir -p ~/dev/MolliePayments-workspace
 cd ~/dev/MolliePayments-workspace
-
 git clone https://github.com/FOSSBilling/FOSSBilling.git
+git -C FOSSBilling checkout 97bb583dd681e311e2d10fe8c648095f2a479878
 git clone https://github.com/StanLousberg/FOSSBillingMollie.git \
   FOSSBilling/.local/MolliePayments
-```
-
-The nested repository is intentional: it keeps the source in its own Git checkout while allowing Docker/DDEV to resolve the development symlinks inside the mounted FOSSBilling workspace.
-
-If you used the initial WSL setup script, the repositories and links may already exist. **Do not rerun clone or `ln -s` commands over existing paths.**
-
-## 3. Install Composer dependencies
-
-Run this in the **MolliePayments repository**, not in FOSSBilling:
-
-```bash
-cd ~/dev/MolliePayments-workspace/FOSSBilling/.local/MolliePayments
+cd FOSSBilling/.local/MolliePayments
 composer install
 ```
 
-This installs the official `mollie/mollie-api-php` SDK v4 and its dependencies into:
-
-```text
-module/Molliepayments/vendor/
-```
-
-That directory is deliberately ignored by Git. The class `Box\Mod\Molliepayments\Support\MollieClientFactory` loads its Composer autoloader when needed and provides configured clients to connection tests, checkout and reconciliation.
-
-The committed `composer.lock` pins reproducible SDK installations. Use `composer install`; do not update dependencies during deployment.
-
-If your host does not have compatible PHP and Composer, start DDEV first (step 5) and install in the container:
+Composer installs the SDK into `module/Molliepayments/vendor/`, which stays untracked. If local PHP is incompatible, use the existing DDEV host instead:
 
 ```bash
 cd ~/dev/MolliePayments-workspace/FOSSBilling
-ddev exec bash -lc 'cd .local/MolliePayments && composer install --no-interaction'
+ddev exec composer install --no-interaction --working-dir=.local/MolliePayments
 ```
 
-The dependency is **already declared** in the MolliePayments `composer.json` as `mollie/mollie-api-php: ^4.0`, so `composer install` is the correct command. `composer require mollie/mollie-api-php` is used when *adding* the requirement, not for installing an already declared dependency. Do not run `composer require` in FOSSBilling's root project. The SDK must remain an independently managed dependency of MolliePayments.
+## Gateway and module links
 
-## 4. Link the gateway and module into FOSSBilling
-
-From the FOSSBilling root:
+From the FOSSBilling root, create only links that are missing:
 
 ```bash
-cd ~/dev/MolliePayments-workspace/FOSSBilling
-
 ln -s "$(pwd)/.local/MolliePayments/gateway/MolliePayments.php" \
   src/library/Payment/Adapter/MolliePayments.php
-
 ln -s "$(pwd)/.local/MolliePayments/gateway" \
   src/library/Payment/Adapter/MolliePayments
-
 ln -s "$(pwd)/.local/MolliePayments/module/Molliepayments" \
   src/modules/Molliepayments
 ```
 
-If those links already exist, skip this step. Check them with:
+The PHP entry point enables adapter discovery. The gateway directory link exposes the original PNG through the standard logo configuration. The module's root `icon.svg` embeds the same unchanged PNG for FOSSBilling's inline icon loader; direct module asset access is not needed. See [branding attribution](BRANDING.md).
+
+Keep these local links out of upstream commits. If necessary, exclude their paths in the host's `.git/info/exclude`, not its tracked `.gitignore`. Do not modify host source, vendor files, themes or webserver rules.
+
+Start the existing DDEV project with `ddev start`. For a new host, complete FOSSBilling's installation using a disposable database. Never reinstall or reset an existing development database to validate this extension.
+
+## Activate and upgrade
+
+Activate MolliePayments under **Extensions** and add its gateway under **Payment Gateways**. Installation creates the module-owned attempt table. For an existing module installation, run from the host root:
 
 ```bash
-ls -l src/library/Payment/Adapter/MolliePayments.php
-ls -ld src/library/Payment/Adapter/MolliePayments
-ls -l src/modules/Molliepayments
+ddev exec php src/modules/Molliepayments/bin/migrate.php /var/www/html/src
 ```
 
-The links are local development conveniences, **not changes to upstream FOSSBilling**. If your FOSSBilling checkout reports them as untracked, add their three paths to `.git/info/exclude` in the FOSSBilling checkout (not to FOSSBilling's tracked `.gitignore`).
+The migration uses module-scoped, additive schema synchronization. It retains attempts, historical columns and financial records. Review the [legacy wallet transition](PAYMENTS.md#legacy-wallet-transition) before accepting payments on an installation with old reservation data; no automatic release or destructive cleanup is performed. Back up the database before upgrades.
 
-The gateway directory link exposes all current and future gateway assets automatically; no per-asset links are needed. FOSSBilling discovers adapters through the separate PHP entry-point link. Existing workspaces with only the PHP and module links must add the gateway directory link once.
+## Credentials and connection test
 
-The extension icon uses a root-level `icon.svg` wrapper containing the original PNG bytes. FOSSBilling inlines it through its module icon loader, so it also works when direct HTTP access to `/modules/` is blocked. The gateway uses `gateway/assets/mollie-icon.png` through the standard adapter logo configuration and directory link. No webserver exceptions or core changes are required.
+1. Obtain standard profile-scoped API keys from **Developers → API keys** in the [Mollie dashboard](https://my.mollie.com/). Advanced access tokens are unsupported.
+2. Leave the gateway disabled while configuring it. Save the **Test API Key (test_xxx)** and, if needed, **Live API Key (live_xxx)** in the native secret fields. Leave a password blank to preserve its saved value; entering a replacement rotates only that key. Native storage encrypts keys and API responses mask them.
+3. Enable **Test mode** for development, plus **Enabled** and **Allow one-time payments** once the schema is installed. Leave subscriptions disabled. Saving configuration never contacts Mollie and does not require checkout URLs. Disabled saves bypass native validation, so connection testing validates saved credentials again.
+4. Open **Extensions → MolliePayments → Settings** and click **Test connection**. Staff require module access, `molliepayments.manage_settings` and `invoice.manage_gateways`.
 
-## 5. Start the development host
+The single action resolves our saved gateway server-side, refuses missing/duplicate instances, and derives its environment from saved Test mode. Save before testing: unsaved browser inputs cannot override the key, environment or gateway. A disabled gateway may be tested without changing its state.
 
-Use the existing FOSSBilling DDEV configuration:
+The test calls SDK `payments->page(null, 1)` ([List Payments](https://docs.mollie.com/reference/list-payments)), without `testmode`. Payment data is discarded and errors are sanitized. Success proves read access at that moment; it does not validate checkout or settlement.
 
-```bash
-cd ~/dev/MolliePayments-workspace/FOSSBilling
-ddev start
-ddev launch
-```
+The connection interface uses the native extension settings route, permissions, CSRF and Twig filters. Current FOSSBilling's template finder does not follow module-directory symlinks. `AdminTwigFactory` therefore adds our settings directory only when the native loader cannot resolve the template. Native templates and theme overrides retain priority; no core page, theme or permission-discovery replacement is installed.
 
-Complete FOSSBilling's installation wizard with a disposable database if necessary. Consult the [FOSSBilling setup guide](https://docs.fossbilling.org/getting-started/) if this is a new installation.
+## Public callbacks and tests
 
-For a repository already configured by the initial setup script, retain its separate DDEV project name and existing install. There is no need to reinstall FOSSBilling.
+Reuse the existing public HTTPS tunnel and configured FOSSBilling system URL. There is no separate webhook-base setting. Confirm `ipn.php` accepts form POSTs without a tunnel interstitial, login gate or CSRF challenge. Keep the admin panel protected. See [payment validation and tunnel precautions](PAYMENTS.md#ddev-with-a-public-webhook-tunnel).
 
-## 6. Run the tests
-
-Run the MolliePayments unit tests through the FOSSBilling Pest framework:
-
-```bash
-cd ~/dev/MolliePayments-workspace/FOSSBilling
-ddev exec ./src/vendor/bin/pest \
-  --test-directory=../tests \
-  --configuration=phpunit.xml.dist \
-  src/modules/Molliepayments/tests/Unit
-```
-
-Run the FOSSBilling Unit and Modules suites to catch regressions:
-
-```bash
-ddev exec ./src/vendor/bin/pest \
-  --test-directory=../tests \
-  --configuration=phpunit.xml.dist \
-  --testsuite=Unit,Modules
-```
-
-The `--test-directory=../tests` argument is mandatory in this project layout: Pest is installed in `src/vendor`, but its bootstrap and base test files are in the root `tests` directory.
-
-The SDK smoke test does not connect to Mollie or require an API key.
-
-### What CI tests
-
-The [GitHub Actions workflow](../.github/workflows/ci.yml) checks out **both** repositories separately, runs Composer for each, generates a disposable `fossbilling/src/config.php` from FOSSBilling's own sample, links the gateway/module and runs their Pest tests through the upstream FOSSBilling runner. The copied test config is created on the temporary GitHub Actions runner only and is not committed. This is a **unit/integration bootstrap**, not a fully installed billing instance or a live payment E2E environment.
-
-## 7. Inspect the extension in FOSSBilling
-
-After DDEV starts, open the administration interface. FOSSBilling should discover the `MolliePayments` gateway from its `src/library/Payment/Adapter` path, and `Molliepayments` from `src/modules`.
-
-Install/activate the development extension, then follow [one-time payment setup](PAYMENTS.md). Existing module installations must run its additive migration. Use only disposable Test-mode payments during validation; do not enable Live payments.
-
-## 8. Configure and test Mollie API credentials
-
-### Compatible FOSSBilling host
-
-Use the explicitly tested FOSSBilling development baseline `97bb583dd681e311e2d10fe8c648095f2a479878`, or a contract-compatible development build covered by CI's current `main` job. Published 0.8.9 is unsupported. The manifest identifies preview version `0.0.1`; it does not promise support for arbitrary later releases. Encrypted gateway secrets, masking/blank updates, invoice authorization/locking, transaction claims, deferred events and module-scoped schema sync are mandatory. Runtime guards reject missing contracts; never patch core or use plaintext fallback.
-
-Existing wallet experiments require the non-destructive [transition review](PAYMENTS.md#legacy-wallet-transition) before accepting new payments. Migrations retain legacy columns and financial history; they do not release reserved balances automatically.
-
-### Obtain, save and rotate credentials
-
-Obtain standard profile-scoped API keys from **Developers → API keys** in the [Mollie dashboard](https://my.mollie.com/). Keep Test (`test_`) and Live (`live_`) keys separate; do not paste advanced access tokens. Consult [Mollie's API key guidance](https://help.mollie.com/hc/en-us/articles/360023732273-What-is-an-API-key).
-
-Activate the companion extension under **Extensions**, add the gateway under **Payment Gateways**, and open **MolliePayments**. Enter either or both password fields and save. Native FOSSBilling encryption protects the saved values; admin responses expose only whether each key is configured. Leave a password blank to keep its previous value. To rotate a credential, enter its replacement and save; the other key remains unchanged. Blank fields do not delete keys.
-
-**Test mode** selects the active credential for future operations: checked selects Test, unchecked selects Live. Required fields follow the active environment when the gateway is enabled. Leave the gateway disabled while configuring credentials. After schema installation and a successful connection test, enable one-time payments in Test mode as described in [PAYMENTS.md](PAYMENTS.md).
-
-FOSSBilling only invokes adapter configuration validation when saving an enabled gateway. A disabled gateway can therefore store an invalid value, but MolliePayments always rejects missing, malformed or wrong-environment keys before a connection request. Prefix validation also runs before enabling. Saving does not contact Mollie and does not require checkout callback URLs.
-
-### Run the connection tests
-
-Open **Extensions → MolliePayments → Settings** using the extension's settings icon. The page contains one **Test connection** button, exclusively for our MolliePayments adapter. It does not list or select other adapters. The adapter's saved **Test mode** flag selects its saved Test key when checked and Live key when unchecked. **Save changes before testing**: these actions load stored credentials server-side, not unsaved password inputs. A disabled gateway can be tested, and the action leaves the saved mode and enabled state unchanged. The browser cannot supply a different gateway ID or environment. If there is no MolliePayments gateway, or multiple copies make the target ambiguous, the test stops with a clear message instead of choosing one arbitrarily.
-
-The settings page uses FOSSBilling's native `/extension/settings/molliepayments` route, module settings permission check, layout, admin API and CSRF token. Staff require MolliePayments module access, `molliepayments.manage_settings` and `invoice.manage_gateways`. The adapter only renders **Live API Key (live_xxx)** and **Test API Key (test_xxx)**; it has no test buttons or custom descriptions beneath those fields. There is no standalone module page or JavaScript injected into gateway settings.
-
-The native template finder does not descend into symlinked module directories. MolliePayments therefore decorates the admin Twig factory with a fallback for its own templates during module service initialization. The standard theme and its overrides retain priority. This supports the native extension settings route without changing core files, theme files, webserver configuration or adding per-file symlinks. The settings template uses the host's supported `url` and `api_url` filters.
-
-The request is the SDK v4 `$client->payments->page(null, 1)`: [List Payments](https://docs.mollie.com/reference/list-payments), `GET https://api.mollie.com/v2/payments?limit=1`. No `testmode` parameter is sent for profile API keys. No payment is created. Any payment details returned by Mollie are discarded, never included in the result or logged. A successful empty collection is a successful connection.
-
-A success only proves that the selected saved key authenticated and could read payments at that moment. It does not validate payment creation, checkout, accounting, webhooks, settlement, refunds, subscriptions or mandates. One-time capability is enabled for development validation; subscription capability remains false. Automated tests use the SDK's fake transport and generated disposable dummy values, without real credentials or network access.
-
-## 9. Develop and submit changes
-
-Open only the MolliePayments checkout in VS Code:
-
-```bash
-cd ~/dev/MolliePayments-workspace/FOSSBilling/.local/MolliePayments
-code .
-```
-
-Commit and push changes there. Never commit symlinks or modified core files from the FOSSBilling checkout.
-
-See [CONTRIBUTING.md](../CONTRIBUTING.md) for the pull-request workflow and required tests.
-
-## Production deployment
-
-There is **no supported production installation at this stage**. Before publishing a deployable release, we must build a release artifact that contains the gateway, companion module and production Composer dependencies, install both in their FOSSBilling locations, and confirm the implemented one-time checkout and webhook flow in a staging environment. Recurring flows are not implemented and are outside this release. This guide will be expanded when those features are implemented.
+Run the complete commands in [VALIDATION.md](VALIDATION.md#automated-execution). Pest requires `--test-directory=../tests` because its executable is under `src/vendor/` while the host bootstrap is at `tests/`. Destructive MariaDB integration fixtures must use the separate `molliepayments_test` database.
 
 ## Troubleshooting
 
-**`The test directory [/var/www/html/src/tests/] does not exist`**
+| Symptom | Check |
+| --- | --- |
+| Pest cannot find `src/tests` | Include `--test-directory=../tests`. |
+| SDK missing | Run this repository's `composer install`; verify `module/Molliepayments/vendor/autoload.php`. |
+| Gateway, module or logo absent | Verify all three links and DDEV's mounted workspace. |
+| Missing/invalid credential | Save the correct `test_` or `live_` key without whitespace; do not paste it into logs/issues. |
+| Permission denied | Check staff module access, settings and gateway permissions, plus the active session. |
+| Timeout/network error | Check outbound HTTPS, DNS, CA certificates and cURL/OpenSSL; never disable TLS verification. |
+| Rate limit/provider unavailable | Wait and retry; saved credentials and gateway mode remain unchanged. |
 
-Use `--test-directory=../tests` in the Pest command above.
-
-**`Mollie SDK is not installed`**
-
-Run `composer install` in `.local/MolliePayments`; check for `module/Molliepayments/vendor/autoload.php`.
-
-**Module or adapter does not appear**
-
-Check the symlink targets and that the respective `manifest.json` and `gateway/MolliePayments.php` files exist. Confirm DDEV is mounting the same FOSSBilling workspace.
-
-**PHP version or missing extension**
-
-Check `ddev exec php -v` and `ddev exec php -m`. Use DDEV's PHP environment instead of the Windows or WSL host if they differ.
-
-**Existing checkout reports untracked links**
-
-Ignore only the three local paths using `.git/info/exclude`, not an upstream FOSSBilling commit.
-
-**Missing or invalid API key / authentication failure**
-
-Save the appropriate key before testing. Check the `test_` or `live_` prefix, remove whitespace and confirm the key has not been revoked. Replace it in the password field and save. The SDK may apply additional key validity checks. Do not paste credentials into issue reports.
-
-**Insufficient permissions**
-
-Use a standard profile API key that can read payments. Check staff access to MolliePayments, `molliepayments.manage_settings` and `invoice.manage_gateways`. Make sure the extension is activated, and sign in again if your session expired.
-
-**Timeout or connection failure**
-
-Ensure PHP can reach `api.mollie.com` over HTTPS with working DNS, trusted CA certificates and cURL/OpenSSL. Check your firewall/proxy. Never disable TLS verification to work around errors. The UI shows sanitized errors; it does not expose provider response bodies.
-
-**Rate limit or temporarily unavailable**
-
-Wait before retrying. A failed test does not change the stored key or gateway mode. Avoid repeated clicks while a request is in progress.
+Production packaging, deployment certification, recurring billing and refunds remain outside the current release.

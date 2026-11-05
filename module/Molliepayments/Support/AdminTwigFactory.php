@@ -38,6 +38,9 @@ final class AdminTwigFactory extends TwigFactory
     public function createAdminEnvironment(StandardDebugBar $debugBar): Environment
     {
         $twig = $this->inner->createAdminEnvironment($debugBar);
+        if ($twig->getLoader()->exists('mod_molliepayments_settings.html.twig')) {
+            return $twig;
+        }
         $twig->setLoader(new ChainLoader([
             $twig->getLoader(),
             new FilesystemLoader(dirname(__DIR__) . '/templates/admin'),

@@ -4,25 +4,11 @@ MolliePayments implements one-time Mollie Checkout through FOSSBilling's native 
 
 Recurring payments, Customers, Mandates, Mollie Subscriptions, refunds and chargeback accounting are not implemented. Subscription capability remains disabled.
 
-## Enable and test
+## Enable and validate
 
-1. Install the SDK and gateway/module links as described in [INSTALLATION.md](INSTALLATION.md). Activate the companion module before enabling the gateway. New module installation creates its own attempt table.
-2. For an existing installation, run the additive module migration from the FOSSBilling root:
+Follow [INSTALLATION.md](INSTALLATION.md) for dependencies, links, schema upgrades and saved credentials. Keep the existing public HTTPS system URL reachable; all callbacks use that native host configuration. Use only disposable customers, orders and issued unpaid invoices in Test mode.
 
-   ```bash
-   ddev exec php src/modules/Molliepayments/bin/migrate.php /var/www/html/src
-   ```
-
-   This calls the module's `update()` lifecycle and `SchemaSynchronizer::syncEntities()` for `MolliePaymentAttempt` only. It does not migrate core tables. Keep the attempt table on upgrades, gateway changes and module removal: it contains payment identity and settlement guards. Back it up with the host database. Do not truncate it to fix a checkout error.
-3. Configure MolliePayments under **Payment Gateways**. Save a standard profile Test API key in the encrypted Test field; enable **Test mode**, **Enabled** and **Allow one-time payments**. Leave subscriptions disabled. Save and use the module settings **Test connection** action. Never paste a key in an issue or command-line argument.
-4. Make the configured FOSSBilling system URL publicly reachable over HTTPS. Both the invoice URL and `ipn.php` callback are generated from native host configuration; there is no MolliePayments webhook-base setting.
-5. Create a disposable customer with matching invoice/client currency and an issued, unpaid, positive ordinary invoice. Sign in as that customer or use an invoice hash link allowed by the host's access policy.
-6. Select **MolliePayments** in the invoice's normal gateway list. The browser navigates to Mollie Checkout. No method is forced: Mollie selects eligible enabled methods. Methods requiring additional order lines or billing data may not be eligible for this minimal payment request.
-7. Complete a Mollie **Test** payment using its test status screen. Return to the invoice. The invoice remains unpaid until authenticated server-side reconciliation confirms payment. Refresh after webhook delivery if necessary.
-8. Verify one successful native transaction with the `tr_…` reference, the correct invoice marked paid, one transaction credit and one matching native invoice debit. Native cron activates pending paid invoice items; ensure the host cron is running.
-9. Redeliver the webhook and refresh/reselect checkout: there must be no additional credit/debit or payment creation. Try failed, canceled and expired test outcomes, and a pending method where available. Test both webhook-before-return and return-before-webhook ordering.
-
-The one-time capability flag is enabled for this development validation. It does not certify production readiness. Do not switch to Live before the full manual test and independent review.
+Select MolliePayments in the invoice's normal gateway list. Complete Hosted Checkout and verify the provider state, invoice, transaction amount, account balance, activation tasks and settlement guard. Redelivering a callback must not add financial entries. Commands, real payment evidence and remaining gaps are in [VALIDATION.md](VALIDATION.md).
 
 ## Checkout and callbacks
 
@@ -102,8 +88,6 @@ Outstanding reservations need an administrator to determine whether funds were c
 
 `processed` means the callback was handled, not that money arrived. Terminal non-paid rows have zero amount and provider status `canceled`, `failed` or `expired`; details and invoice transaction history show that zero and the provider status. Host income reports derive revenue from paid/refunded invoices, while balance reports sum native balance entries. These callbacks create neither entries nor paid invoices, payment events or activation tasks. Duplicate callbacks remain financially inert. Genuine verification/processing exceptions remain native errors. Third-party reports counting all processed rows as successful payments need their own filtering; core lacks a dedicated unsuccessful-result outcome.
 
-## Compatibility and validation limits
+## Host contract
 
-Supported development baseline: FOSSBilling `97bb583dd681e311e2d10fe8c648095f2a479878` (preview version `0.0.1`), plus contract-compatible development builds covered by CI's current `main` job. Published `0.8.9` is unsupported; a greater version number alone is not a compatibility promise. Runtime checks fail closed on missing security/atomicity contracts, rather than providing compatibility shims. CI tests both the pinned baseline and current `main`, each with SQLite and MariaDB.
-
-The official SDK `^4.0` is isolated in the module; commit and install `composer.lock`. No host dependencies or core files are changed. See [validation evidence](VALIDATION.md) for actual results, provider limitations and scenarios not verified. This remains a development integration, not a production-ready release.
+See [supported hosts and dependencies](INSTALLATION.md#supported-host-and-dependencies). The settlement bridge and template fallback exist because the tested host APIs cannot yet replace them safely; [core proposals](FOSSBILLING_CORE_PROPOSALS.md) describe the generic changes needed upstream. This remains a development integration, not a production-ready release.

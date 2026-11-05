@@ -12,6 +12,7 @@ use Box\Mod\Invoice\Entity\PayGateway;
 use Box\Mod\Invoice\Entity\Transaction;
 use Box\Mod\Molliepayments\Entity\MolliePaymentAttempt;
 use Box\Mod\Molliepayments\PaymentService;
+use Box\Mod\Molliepayments\Support\Amount;
 use Box\Mod\Molliepayments\Support\MollieClientFactory;
 use Doctrine\DBAL\DriverManager;
 use Doctrine\ORM\EntityManager;
@@ -217,4 +218,19 @@ function mollieWebhook(object $ctx, ?array $data = null): Transaction
     ], (int) $ctx->gateway->getId());
 
     return $tx;
+}
+
+function mollieCredit(object $ctx, string $amount): void
+{
+    $ctx->clientService->addFunds($ctx->client, $amount, 'Disposable account credit');
+}
+
+function mollieBalance(object $ctx): int
+{
+    $minor = 0;
+    foreach ($ctx->db->fetchFirstColumn('SELECT amount FROM client_balance WHERE client_id = ?', [$ctx->client->getId()]) as $amount) {
+        $minor += Amount::minor((string) $amount);
+    }
+
+    return $minor;
 }

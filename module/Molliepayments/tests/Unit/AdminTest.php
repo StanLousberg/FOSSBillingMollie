@@ -184,7 +184,28 @@ test('native admin rendering discovers symlinked module settings while preservin
     expect($di['twig_factory'])->toBe($registered);
     $environment = $registered->createAdminEnvironment(new DebugBar\StandardDebugBar());
     expect($environment->getLoader()->exists('mod_molliepayments_settings.html.twig'))->toBeTrue()
+        ->and($environment->getLoader()->exists('mod_unrelated_settings.html.twig'))->toBeFalse()
         ->and($environment->render('theme-owned.html.twig'))->toBe('Theme content');
     $originalLoader->setTemplate('mod_molliepayments_settings.html.twig', 'Theme override');
     expect($environment->render('mod_molliepayments_settings.html.twig'))->toBe('Theme override');
+});
+
+test('native Twig loader misses symlinked settings while still resolving the module icon', function (): void {
+    $loader = new FOSSBilling\Core\Twig\TwigLoader(FOSSBilling\Core\Twig\AppArea::ADMIN, PATH_THEMES . '/admin_default');
+    expect(is_link(PATH_MODS . '/Molliepayments'))->toBeTrue()
+        ->and($loader->exists('mod_molliepayments_settings.html.twig'))->toBeFalse()
+        ->and($loader->exists('mod_Molliepayments_icon.svg'))->toBeTrue();
+});
+
+test('template fallback leaves an already resolved native or theme template loader intact', function (): void {
+    $loader = new Twig\Loader\ArrayLoader(['mod_molliepayments_settings.html.twig' => 'Native template']);
+    $twig = new Twig\Environment($loader);
+    $factory = Mockery::mock(FOSSBilling\Core\Twig\TwigFactory::class);
+    $factory->shouldReceive('createAdminEnvironment')->once()->andReturn($twig);
+    $di = Tests\Helpers\container();
+    $di['twig_factory'] = $factory;
+    Box\Mod\Molliepayments\Support\AdminTwigFactory::register($di);
+    $environment = $di['twig_factory']->createAdminEnvironment(new DebugBar\StandardDebugBar());
+    expect($environment->getLoader())->toBe($loader)
+        ->and($environment->render('mod_molliepayments_settings.html.twig'))->toBe('Native template');
 });
