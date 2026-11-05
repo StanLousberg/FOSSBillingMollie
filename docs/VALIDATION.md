@@ -97,3 +97,18 @@ Before/after checksums of every pre-existing row in `invoice`, `client_balance`,
 Fix/retest: fixture consolidation initially missed the helper's `Amount` import; restored it and reran the affected balance/logo tests, then full suites on both host revisions. The temporary real-payment harness initially compared an SDK status enum with a string; switched it to SDK `isPaid()` and repeated provider/database verification, duplicate delivery and activation. Neither failure required changing financial expectations or skipping tests.
 
 The earlier real-provider terminal-state and interactive-browser gaps listed above remain **not verified** in this cleanup run. The real regression used hosted HTTP forms, not an interactive browser. Canceled, failed, expired, pending and authorized accounting remains covered by provider fakes and native database tests. No Live keys were used or overwritten; no core files were modified. The result is committed locally only, with no push or PR.
+
+## Issue #7 Customer integration — 2026-11-05
+
+Local validation on the existing disposable DDEV host (PHP 8.3.30, MariaDB 11.8), using locked SDK v4.0.0 and mocked provider calls:
+
+- `composer validate --strict --no-check-publish`: passed.
+- `composer install --no-interaction --prefer-dist --no-progress`: passed; lock unchanged.
+- PHP syntax: all 34 non-vendor PHP files passed.
+- PHP-CS-Fixer dry run: 34 files checked, zero fixes required.
+- Complete unit/SQLite suite: **178 tests, 928 assertions**, zero skipped/unexecuted in that suite.
+- MariaDB integration suite, with `MOLLIEPAYMENTS_MYSQL_URL` pointing only at `molliepayments_test`: **12 tests, 93 assertions**, zero skipped/unexecuted in that suite. Includes independent Customer workers, committed creation identity, lost-response retry, expired-window read recovery, repeated verification and additive schema preservation.
+
+The unit suite includes 24 new Customer cases and all existing one-time payment/accounting regressions. Initial direct WSL testing could not execute because PDO SQLite is absent; final successful suites ran inside DDEV. The added MariaDB regression exposed and now covers MySQL's zero-changed-row behavior for same-second verification writes.
+
+The existing GitHub Actions four-job compatibility matrix is triggered by the feature PR (pinned host and upstream main, SQLite and MariaDB). Its final status is reported on that PR. No real Customer API/manual Test-mode run was performed for this feature; follow the manual steps in [PAYMENTS.md](PAYMENTS.md#internal-customer-integration-issue-7). This evidence does not establish production readiness or recurring capability.

@@ -34,7 +34,7 @@ final class Service implements InjectionAwareInterface
     public function install(): bool
     {
         Support\Compatibility::assertHost();
-        \FOSSBilling\Core\Doctrine\SchemaSynchronizer::syncEntities($this->di['em'], [Entity\MolliePaymentAttempt::class]);
+        \FOSSBilling\Core\Doctrine\SchemaSynchronizer::syncEntities($this->di['em'], [Entity\MolliePaymentAttempt::class, Entity\MollieCustomer::class]);
 
         return true;
     }
@@ -47,6 +47,11 @@ final class Service implements InjectionAwareInterface
     public function payments(): PaymentService
     {
         return $this->paymentFactory !== null ? ($this->paymentFactory)($this->di) : new PaymentService($this->di);
+    }
+
+    public function customers(): CustomerService
+    {
+        return new CustomerService($this->di);
     }
 
     public function getModulePermissions(): array
