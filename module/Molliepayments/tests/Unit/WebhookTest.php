@@ -42,15 +42,26 @@ test('authenticated terminal statuses release the slot for a new attempt', funct
 test('a paid webhook settles via native accounting exactly once across distinct delivery rows', function (): void {
     $ctx = molliePaymentContext();
     $ctx->payments->checkout($ctx->invoice->getId(), $ctx->gateway->getId());
+    $events = 0;
+    $ctx->di['event_dispatcher']->addListener(Box\Mod\Invoice\Event\AfterAdminInvoicePaymentReceivedEvent::class, static function () use (&$events): void { ++$events; });
     $ctx->status = 'paid';
     $tx = mollieWebhook($ctx);
     expect($ctx->invoice->getStatus())->toBe(Invoice::STATUS_PAID)
         ->and($tx->getTxnId())->toBe('tr_disposable123')->and($tx->getAmount())->toBe('12.34')
         ->and($tx->getStatus())->toBe(Transaction::STATUS_PROCESSED)
+        ->and($tx->getType())->toBe(Payment_Transaction::TXTYPE_PAYMENT)
         ->and($ctx->db->fetchOne('SELECT COUNT(*) FROM client_balance'))->toBe(2)
         ->and((float) $ctx->db->fetchOne('SELECT SUM(amount) FROM client_balance'))->toBe(0.0);
     $duplicate = mollieWebhook($ctx);
     expect($duplicate->getAmount())->toBe('0.00')
+        ->and($duplicate->getStatus())->toBe(Transaction::STATUS_PROCESSED)
+        ->and($duplicate->getTxnStatus())->toBe('paid')
+        ->and($duplicate->getTxnId())->toBe($tx->getTxnId())
+        ->and($duplicate->getType())->toBe(Payment_Transaction::TXTYPE_UNKNOWN)
+        ->and($duplicate->getNote())->toBe('Duplicate Mollie webhook handled. Original payment was already processed.')
+        ->and($events)->toBe(1)
+        ->and($tx->getAmount())->toBe('12.34')
+        ->and($tx->getTxnStatus())->toBe('paid')
         ->and($ctx->db->fetchOne('SELECT COUNT(*) FROM client_balance'))->toBe(2)
         ->and((int) mollieAttempt($ctx)['settled_transaction_id'])->toBe($tx->getId());
 });
@@ -216,3 +227,74 @@ test('failed settlement rolls back credit, invoice mutation and attempt guard to
         ->and(mollieAttempt($ctx)['settled_transaction_id'])->toBeNull()
         ->and(mollieAttempt($ctx)['status'])->toBe('paid');
 });
+
+test('incomplete callback input is rejected before contacting Mollie even for a paid invoice', function (string $case, string $message): void {
+    $ctx = molliePaymentContext();
+    $ctx->payments->checkout($ctx->invoice->getId(), $ctx->gateway->getId());
+    $ctx->status = 'paid';
+    mollieWebhook($ctx);
+    $requests = count($ctx->requests);
+    $data = ['get' => ['invoice_id' => $ctx->invoice->getId(), 'attempt_id' => mollieAttempt($ctx)['id']], 'post' => ['id' => 'tr_disposable123']];
+    match ($case) {
+        'get' => $data['post'] = [],
+        'query-id' => $data = ['get' => $data['get'] + ['id' => 'tr_disposable123'], 'post' => []],
+        'empty' => $data['post']['id'] = '',
+        'malformed' => $data['post']['id'] = 'tr_../private',
+        'array' => $data['post']['id'] = ['tr_disposable123'],
+        'missing-attempt' => $data['get']['attempt_id'] = null,
+        'malformed-attempt' => $data['get']['attempt_id'] = 'invalid',
+    };
+    expect(fn () => mollieWebhook($ctx, $data))->toThrow(Payment_Exception::class, $message)
+        ->and(count($ctx->requests))->toBe($requests)
+        ->and($ctx->db->fetchOne('SELECT COUNT(*) FROM client_balance'))->toBe(2);
+})->with([
+    ['get', 'requires a form POST payment ID'],
+    ['query-id', 'requires a form POST payment ID'],
+    ['empty', 'requires a form POST payment ID'],
+    ['malformed', 'Malformed Mollie payment ID'],
+    ['array', 'Malformed Mollie payment ID'],
+    ['missing-attempt', 'Missing or malformed Mollie callback attempt ID'],
+    ['malformed-attempt', 'Missing or malformed Mollie callback attempt ID'],
+]);
+
+test('native identical IPN deduplication returns the processed transaction without another provider request', function (): void {
+    $ctx = molliePaymentContext();
+    $ctx->payments->checkout($ctx->invoice->getId(), $ctx->gateway->getId());
+    $ctx->status = 'paid';
+    $events = 0;
+    $ctx->di['event_dispatcher']->addListener(Box\Mod\Invoice\Event\AfterAdminInvoicePaymentReceivedEvent::class, static function () use (&$events): void { ++$events; });
+    $data = [
+        'invoice_id' => $ctx->invoice->getId(), 'gateway_id' => $ctx->gateway->getId(), 'source' => 'ipn',
+        'get' => ['invoice_id' => $ctx->invoice->getId(), 'attempt_id' => mollieAttempt($ctx)['id']],
+        'post' => ['id' => 'tr_disposable123'], 'http_raw_post_data' => 'id=tr_disposable123',
+        'server' => ['REQUEST_METHOD' => 'POST', 'REQUEST_TIME_FLOAT' => 1.0],
+    ];
+    $id = $ctx->transactionService->createAndProcess($data);
+    $requests = count($ctx->requests);
+    expect($ctx->transactionService->createAndProcess($data))->toBe($id)
+        ->and(count($ctx->requests))->toBe($requests)
+        ->and($events)->toBe(1)
+        ->and($ctx->db->fetchOne('SELECT COUNT(*) FROM `transaction`'))->toBe(1)
+        ->and($ctx->db->fetchOne('SELECT COUNT(*) FROM client_balance'))->toBe(2);
+    $tx = $ctx->em->find(Transaction::class, $id);
+    expect($tx->getStatus())->toBe(Transaction::STATUS_PROCESSED)
+        ->and($tx->getTxnStatus())->toBe('paid')->and($tx->getType())->toBe(Payment_Transaction::TXTYPE_PAYMENT);
+});
+
+test('callback gateway and saved environment must match the attempt before provider access', function (string $case): void {
+    $ctx = molliePaymentContext();
+    $ctx->payments->checkout($ctx->invoice->getId(), $ctx->gateway->getId());
+    if ($case === 'gateway') {
+        $other = new Box\Mod\Invoice\Entity\PayGateway();
+        $other->setGateway('MolliePayments')->setName('Other Mollie gateway')->setTestMode(true)->setEnabled(true)->setConfig($ctx->gateway->getConfig());
+        $ctx->em->persist($other);
+        $ctx->gateway = $other;
+    } else {
+        $ctx->gateway->setTestMode(false)->setConfig(json_encode(['api_key' => 'live_' . str_repeat('x', 30)]));
+    }
+    $ctx->em->flush();
+    expect(fn () => mollieWebhook($ctx))->toThrow(Payment_Exception::class, 'does not match')
+        ->and(count($ctx->requests))->toBe(1)
+        ->and($ctx->invoice->getStatus())->toBe(Invoice::STATUS_UNPAID)
+        ->and($ctx->db->fetchOne('SELECT COUNT(*) FROM client_balance'))->toBe(0);
+})->with(['gateway', 'environment']);

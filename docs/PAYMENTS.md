@@ -91,3 +91,21 @@ Outstanding reservations need an administrator to determine whether funds were c
 ## Host contract
 
 See [supported hosts and dependencies](INSTALLATION.md#supported-host-and-dependencies). The settlement bridge and template fallback exist because the tested host APIs cannot yet replace them safely; [core proposals](FOSSBILLING_CORE_PROPOSALS.md) describe the generic changes needed upstream. This remains a development integration, not a production-ready release.
+
+## Transaction outcomes and webhook replay
+
+Native transaction `status=processed` means processing finished; `txn_status` is the verified Mollie provider outcome. Successful receipts use native type `payment`. Canceled, failed and expired one-time payments use native type `unknown`, amount `0.00`, and their provider status. The available alternatives (`payment`, `refund`, `subscription_create`, `subscription_cancel`) describe different financial actions. Their administrative note reads, for example, “Mollie payment canceled. No funds received. Invoice remains unpaid.” No balance entry, payment-received event or activation task is created.
+
+A valid duplicate is a form-encoded POST to the **original** callback URL with the same `id=tr_…`. The native IPN hash check returns the existing processed transaction for an identical stored payload without invoking the adapter again. Real HTTP redeliveries generally have different request timestamps and therefore different hashes; core does not recognize Mollie's form `id` as its external `txn_id` shortcut. Such a delivery can create another audit row. The adapter authenticates and verifies the provider payment again, then uses the existing attempt settlement guard under the invoice lock. This row has zero amount, type `unknown`, the verified `paid` provider status and the note “Duplicate Mollie webhook handled. Original payment was already processed.” The original receipt and settlement guard remain unchanged. No additional deduplication layer is used.
+
+For development, use only a disposable Test-mode payment. Read its original `webhookUrl` from the saved attempt request locally and its matching provider payment ID; do not substitute another invoice, gateway, attempt or environment. Replay it with:
+
+```bash
+curl --silent --show-error --request POST \
+  --data-urlencode 'id=tr_REPLACE_WITH_TEST_PAYMENT_ID' \
+  'https://YOUR_ORIGINAL_HOST/ipn.php?gateway_id=GATEWAY&invoice_id=INVOICE&attempt_id=ATTEMPT'
+```
+
+Expect HTTP 200 and a native JSON result with no error. Compare the original transaction, invoice, attempt guard, customer balance and native balance entries before and after. Core controls the JSON response (normally a transaction ID); it does not display the adapter's duplicate note as a custom HTTP message.
+
+Opening that URL in a browser sends GET without the required form POST data. It returns HTTP 400, “Mollie webhook requires a form POST payment ID.” A payment ID in the query string is insufficient. Malformed payment IDs and missing/malformed attempt IDs have separate safe 400 errors. Unrecognized attempts and mismatched invoice/gateway/environment/provider identity retain existing rejection and verification behavior. A completed invoice alone never authorizes a callback. Native core can retain invalid requests as error audit rows; the adapter does not change the endpoint or its processed-transaction handling.

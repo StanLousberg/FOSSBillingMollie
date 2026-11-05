@@ -47,6 +47,8 @@ test('terminal callbacks leave credit untouched without a technical error', func
     expect(mollieBalance($ctx))->toBe(1000)
         ->and($tx->getStatus())->toBe(Transaction::STATUS_PROCESSED)->and($tx->getAmount())->toBe('0.00')
         ->and($tx->getTxnStatus())->toBe($status)->and($tx->getError())->toBeNull()
+        ->and($tx->getType())->toBe(Payment_Transaction::TXTYPE_UNKNOWN)
+        ->and($tx->getNote())->toBe('Mollie payment ' . $status . '. No funds received. Invoice remains unpaid.')
         ->and($ctx->invoice->getStatus())->toBe(Invoice::STATUS_UNPAID);
     mollieWebhook($ctx);
     expect(mollieBalance($ctx))->toBe(1000)

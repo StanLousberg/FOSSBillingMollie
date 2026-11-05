@@ -97,3 +97,32 @@ Before/after checksums of every pre-existing row in `invoice`, `client_balance`,
 Fix/retest: fixture consolidation initially missed the helper's `Amount` import; restored it and reran the affected balance/logo tests, then full suites on both host revisions. The temporary real-payment harness initially compared an SDK status enum with a string; switched it to SDK `isPaid()` and repeated provider/database verification, duplicate delivery and activation. Neither failure required changing financial expectations or skipping tests.
 
 The earlier real-provider terminal-state and interactive-browser gaps listed above remain **not verified** in this cleanup run. The real regression used hosted HTTP forms, not an interactive browser. Canceled, failed, expired, pending and authorized accounting remains covered by provider fakes and native database tests. No Live keys were used or overwritten; no core files were modified. The result is committed locally only, with no push or PR.
+
+## Transaction callback clarity — 2026-11-05
+
+Started from latest `origin/main`, `9b2f273`, on `fix/transaction-callback-clarity`. Inspected the external host's `Payment/Transaction.php`, Invoice `Entity/Transaction.php`, `ServiceTransaction.php` and `ipn.php`. Native types have no unsuccessful one-time value: retain `unknown`; `processed` describes handled processing, while `txn_status` describes Mollie's verified state. No state-machine, schema, accounting or FOSSBilling core changes were needed.
+
+Before editing, a fresh disposable Test payment on invoice 25 (`tr_GhnnHteMqzkvq9fP5S9ZJ`, €25) was completed using real Hosted Checkout iDEAL Test forms over HTTP. The browser return was not followed. The public tunnel webhook settled it as native transaction 32. On its original callback URL:
+
+| Request | Before | After |
+| --- | --- | --- |
+| GET without POST body | HTTP 400, `Invalid Mollie payment callback.` | HTTP 400, `Mollie webhook requires a form POST payment ID.` |
+| Form POST with malformed `id=invalid` | HTTP 400, generic invalid callback | HTTP 400, `Malformed Mollie payment ID.` |
+| Form POST with the original valid payment ID | HTTP 200, no API error | HTTP 200, no API error |
+
+Confirmed cause of the reproduced generic HTTP 400: missing/malformed identifiers entering the combined adapter validation, including a browser GET without form data. Valid repeated POST already succeeded before the fix. This establishes the cause for the reproduced requests; an unknown historical request cannot be classified without its original method/body.
+
+After the fix, authenticated provider GET still reported `paid`, the invoice remained paid, and the settlement guard remained transaction 32. The new duplicate row was `processed` / `paid` / `unknown`, amount `0.00`; the original receipt remained `processed` / `paid` / `payment`, €25. Only one +€25 transaction credit and one -€25 invoice debit existed. Account credit remained €11. GET and invalid POST created native error audit rows and no financial entries. A pre-fix duplicate row retained its old `duplicate` provider label; historical rows were not rewritten. Checksums for every pre-existing row in invoice, client_balance, transaction, molliepayments_attempt and client_order matched after replay. No development database reset, Live request, credential update or active-slot cleanup occurred.
+
+Automated DDEV execution on PHP 8.3.30 / MariaDB 11.8:
+
+- Targeted webhook/native-balance tests: 55 tests, 390 assertions passed; after adding local gateway/environment cases, webhook-only tests: 37 tests, 242 assertions passed.
+- Complete MolliePayments unit/SQLite suite: **164 tests, 840 assertions passed**. Checkout and connection-test coverage retained; unrelated host unit suites were not run.
+- MariaDB integration suite using only disposable `molliepayments_test`: **11 tests, 118 assertions passed**. Existing development database retained. Independent duplicate workers produced one financial booking and one paid invoice event; both audit rows retained `paid`. Canceled/failed/expired simulations verified zero amounts, clear notes, unchanged credit and no events/activation on both databases.
+- Native identical-IPN regression exercises actual `createAndProcess()` twice and verifies the same processed row, no extra provider fetch, no second payment event and no additional accounting entries. Distinct-row tests exercise the existing attempt guard. Malformed/missing callback data on an already paid invoice still fails before provider access; invoice/gateway/environment and authenticated metadata mismatches remain rejected.
+
+Commands are the unit, MariaDB and style commands listed above (unit output saved at host `/tmp/mp-callback-unit.log`). All 28 PHP files passed syntax checks; strict Composer validation passed; final PHP-CS-Fixer dry run passed with zero changes; `git diff --check` passed. No assertions were weakened or skipped. Style initially flagged extra blank lines in new tests; removed them.
+
+A second disposable Test invoice 26 (`tr_pnzZwrXYUZQNQ7n3PS9ZJ`) was submitted with `failed` on the iDEAL Test form. Authenticated provider inspection still reported parent payment `open`; invoice unpaid, no transactions, no settlement guard, no payment ledger entries, and unchanged €11 credit. The successful-payment inspection assertion correctly failed for that open payment. Its attempt and active slot remain preserved. Genuine terminal failed/canceled/expired outcomes remain **unverified**; automated provider simulations pass. Earlier real cancellation attempts also left parent payments open, as documented above. No terminal state was forced locally. Interactive browser execution was not performed; GET behavior was tested over HTTP through the same public endpoint.
+
+Core limitations remain the existing native transaction vocabulary, timestamp-sensitive IPN hashing, native error-row creation and JSON transaction-ID responses without a custom duplicate message. These are documented in PAYMENTS.md and FOSSBILLING_CORE_PROPOSALS.md. Temporary validation harnesses and state are under `/tmp`, outside the committed source.

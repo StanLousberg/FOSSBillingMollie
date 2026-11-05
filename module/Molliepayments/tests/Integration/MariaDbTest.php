@@ -111,7 +111,10 @@ test('MariaDB duplicate webhook workers settle once and leave existing credit un
     mollieMariaWorkers([$webhook, $webhook]);
     $check = mollieMariaContext(false);
     expect($check->invoice->getStatus())->toBe('paid')->and(mollieBalance($check))->toBe(1000)
-        ->and((int) $check->db->fetchOne("SELECT COUNT(*) FROM client_balance WHERE type = 'transaction'"))->toBe(1);
+        ->and((int) $check->db->fetchOne("SELECT COUNT(*) FROM client_balance WHERE type = 'transaction'"))->toBe(1)
+        ->and((int) $check->db->fetchOne("SELECT COUNT(*) FROM invoice_event WHERE type = 'paid'"))->toBe(1)
+        ->and((int) $check->db->fetchOne("SELECT COUNT(*) FROM `transaction` WHERE txn_status = 'paid' AND status = 'processed'"))->toBe(2)
+        ->and((int) $check->db->fetchOne("SELECT COUNT(*) FROM `transaction` WHERE txn_status = 'duplicate'"))->toBe(0);
 });
 
 test('MariaDB competing invoices leave native credit untouched', function (): void {
@@ -235,3 +238,23 @@ test('MariaDB upgrades retain legacy wallet columns and history without releasin
         ->and(mollieAttempt($ctx))->toBe($before)->and(mollieBalance($ctx))->toBe(0)
         ->and((int) $ctx->db->fetchOne('SELECT COUNT(*) FROM client_balance'))->toBe(2);
 });
+
+test('MariaDB terminal callbacks retain native zero-value outcomes without accounting or activation', function (string $status): void {
+    $ctx = mollieMariaContext();
+    mollieCredit($ctx, '10.00');
+    $ctx->payments->checkout($ctx->invoice->getId(), $ctx->gateway->getId());
+    $events = 0;
+    $ctx->di['event_dispatcher']->addListener(Box\Mod\Invoice\Event\AfterAdminInvoicePaymentReceivedEvent::class, static function () use (&$events): void { ++$events; });
+    $ctx->status = $status;
+    foreach ([1, 2] as $delivery) {
+        $tx = mollieWebhook($ctx);
+        expect($tx->getStatus())->toBe(Box\Mod\Invoice\Entity\Transaction::STATUS_PROCESSED)
+            ->and($tx->getType())->toBe(Payment_Transaction::TXTYPE_UNKNOWN)
+            ->and($tx->getTxnStatus())->toBe($status)->and($tx->getAmount())->toBe('0.00')
+            ->and($tx->getNote())->toBe('Mollie payment ' . $status . '. No funds received. Invoice remains unpaid.');
+    }
+    expect(mollieBalance($ctx))->toBe(1000)->and($events)->toBe(0)
+        ->and($ctx->invoice->getStatus())->toBe(Invoice::STATUS_UNPAID)
+        ->and($ctx->item->getStatus())->not->toBe(Box\Mod\Invoice\Entity\InvoiceItem::STATUS_PENDING_SETUP)
+        ->and((int) $ctx->db->fetchOne('SELECT COUNT(*) FROM client_balance'))->toBe(1);
+})->with(['canceled', 'failed', 'expired']);

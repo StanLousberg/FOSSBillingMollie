@@ -168,9 +168,14 @@ final class PaymentService
     {
         $paymentId = $data['post']['id'] ?? null;
         $attemptId = $data['get']['attempt_id'] ?? null;
-        if (!is_string($paymentId) || !preg_match('/^tr_[A-Za-z0-9]{1,60}$/D', $paymentId)
-            || !is_string($attemptId) || !preg_match('/^[a-f0-9]{32}$/D', $attemptId)) {
-            throw new \Payment_Exception('Invalid Mollie payment callback.', [], 400);
+        if ($paymentId === null || $paymentId === '') {
+            throw new \Payment_Exception('Mollie webhook requires a form POST payment ID.', [], 400);
+        }
+        if (!is_string($paymentId) || !preg_match('/^tr_[A-Za-z0-9]{1,60}$/D', $paymentId)) {
+            throw new \Payment_Exception('Malformed Mollie payment ID.', [], 400);
+        }
+        if (!is_string($attemptId) || !preg_match('/^[a-f0-9]{32}$/D', $attemptId)) {
+            throw new \Payment_Exception('Missing or malformed Mollie callback attempt ID.', [], 400);
         }
         $attempt = $this->attempts->find($attemptId);
         $this->assertNoLegacyCredit($attempt);
@@ -198,7 +203,7 @@ final class PaymentService
                     $tx->setStatus($terminal ? Transaction::STATUS_PROCESSED : Transaction::STATUS_RECEIVED);
                     $tx->setAmount($terminal ? '0.00' : null);
                     $tx->setType(\Payment_Transaction::TXTYPE_UNKNOWN);
-                    $tx->setNote($terminal ? 'Mollie callback handled: ' . $current['status'] . '; no money received or invoice settled.' : null);
+                    $tx->setNote($terminal ? 'Mollie payment ' . $current['status'] . '. No funds received. Invoice remains unpaid.' : null);
                     $tx->setError(null);
                     $tx->setErrorCode(null);
                     $tx->setUpdatedAt(new \DateTime());
@@ -235,9 +240,12 @@ final class PaymentService
             if ($attempt['settled_transaction_id'] !== null) {
                 // A delivery has its own audit row, but never another accounting entry.
                 if ((int) $attempt['settled_transaction_id'] !== (int) $tx->getId()) {
-                    $tx->setNote('Duplicate Mollie callback; settled by transaction ' . $attempt['settled_transaction_id']);
+                    $tx->setNote('Duplicate Mollie webhook handled. Original payment was already processed.');
                     $tx->setStatus(Transaction::STATUS_PROCESSED);
-                    $tx->setTxnStatus('duplicate');
+                    $tx->setTxnId($attempt['payment_id']);
+                    $tx->setTxnStatus($attempt['status']);
+                    $tx->setCurrency($attempt['currency']);
+                    $tx->setType(\Payment_Transaction::TXTYPE_UNKNOWN);
                     $tx->setAmount('0.00');
                     $tx->setUpdatedAt(new \DateTime());
                     $this->di['em']->flush();
