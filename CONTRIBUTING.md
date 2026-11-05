@@ -33,7 +33,7 @@ ddev exec ./src/vendor/bin/pest \
   src/modules/Molliepayments/tests/Unit
 ```
 
-Before submitting, run syntax checks on changed PHP files, execute relevant module tests and review your diff for sensitive data. GitHub Actions runs the core smoke-test workflow on PRs.
+Before submitting, run syntax checks on changed PHP files, execute relevant module tests and review your diff for sensitive data. GitHub Actions runs the module suite against the pinned host baseline and current upstream main, including SQLite and MariaDB coverage. See [validation commands](docs/VALIDATION.md#automated-execution).
 
 ## Code guidelines
 

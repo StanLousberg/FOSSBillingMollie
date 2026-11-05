@@ -14,8 +14,10 @@ final class Service implements InjectionAwareInterface
 {
     private ?\Pimple\Container $di = null;
 
-    public function __construct(private readonly ConnectionChecker $checker = new ConnectionChecker())
-    {
+    public function __construct(
+        private readonly ConnectionChecker $checker = new ConnectionChecker(),
+        private readonly ?\Closure $paymentFactory = null,
+    ) {
     }
 
     public function setDi(\Pimple\Container $di): void
@@ -31,9 +33,20 @@ final class Service implements InjectionAwareInterface
 
     public function install(): bool
     {
-        // Reserved for module-owned Doctrine entities and tables.
-        // Never create or alter FOSSBilling core tables here.
+        Support\Compatibility::assertHost();
+        \FOSSBilling\Core\Doctrine\SchemaSynchronizer::syncEntities($this->di['em'], [Entity\MolliePaymentAttempt::class]);
+
         return true;
+    }
+
+    public function update(array $manifest = []): bool
+    {
+        return $this->install();
+    }
+
+    public function payments(): PaymentService
+    {
+        return $this->paymentFactory !== null ? ($this->paymentFactory)($this->di) : new PaymentService($this->di);
     }
 
     public function getModulePermissions(): array
