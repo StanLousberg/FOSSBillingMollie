@@ -41,7 +41,7 @@ function molliePaymentContext(string $environment = 'test', ?string $databasePat
     $ctx->em = new EntityManager(DriverManager::getConnection($connectionParameters ?? ($databasePath === null ? ['driver' => 'pdo_sqlite', 'memory' => true] : ['driver' => 'pdo_sqlite', 'path' => $databasePath])), $config);
     $ctx->db = $ctx->em->getConnection();
     $classes = [Client::class, ClientBalance::class, Currency::class, Invoice::class, InvoiceItem::class,
-        InvoiceEvent::class, PayGateway::class, Transaction::class, MolliePaymentAttempt::class, Box\Mod\Molliepayments\Entity\MollieCustomer::class, Box\Mod\Order\Entity\Order::class];
+        InvoiceEvent::class, PayGateway::class, Transaction::class, MolliePaymentAttempt::class, Box\Mod\Molliepayments\Entity\MollieCustomer::class, Box\Mod\Order\Entity\Order::class, Box\Mod\Order\Entity\OrderMeta::class];
     if ($ctx->db->getDatabasePlatform() instanceof Doctrine\DBAL\Platforms\SQLitePlatform) {
         $ctx->db->executeStatement('PRAGMA busy_timeout = 5000');
     }

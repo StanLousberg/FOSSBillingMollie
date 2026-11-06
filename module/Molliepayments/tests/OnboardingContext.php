@@ -10,6 +10,19 @@ require_once __DIR__ . '/CustomerContext.php';
 
 function mollieOnboarding(object $ctx): object
 {
+    $order = $ctx->em->find(Box\Mod\Order\Entity\Order::class, (int) $ctx->item->getRelId());
+    if ($order === null) {
+        $order = new Box\Mod\Order\Entity\Order();
+        $order->setClientId($ctx->client->getId())->setTitle('Disposable recurring service')->setPeriod('1M')->setStatus('pending_setup');
+        $ctx->em->persist($order);
+        $ctx->em->flush();
+        $ctx->item->setType(Box\Mod\Invoice\Entity\InvoiceItem::TYPE_ORDER)->setRelId((string) $order->getId())->setPeriod('1M');
+        $ctx->em->flush();
+    }
+    $ctx->order = $order;
+    $orderService = new Box\Mod\Order\Service();
+    $orderService->setDi($ctx->di);
+    $ctx->services['order'] = $orderService;
     mollieCustomers($ctx);
     $ctx->responses += $ctx->customerResponses;
     $ctx->mandateId = 'mdt_disposable';

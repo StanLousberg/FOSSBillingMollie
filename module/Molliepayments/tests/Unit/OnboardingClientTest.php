@@ -26,7 +26,7 @@ function mollieClientApi(object $ctx, array $params = [], string $method = 'POST
 
 function mollieConsentParams(object $ctx): array
 {
-    return ['CSRFToken' => 'disposable-nonce', 'consent' => '1', 'consent_version' => PaymentService::CONSENT_VERSION, 'invoice_id' => $ctx->invoice->getId()];
+    return ['CSRFToken' => 'disposable-nonce', 'consent' => '1', 'consent_digest' => $ctx->payments->onboarding($ctx->invoice->getId())['consent_digest'], 'consent_version' => PaymentService::CONSENT_VERSION, 'invoice_id' => $ctx->invoice->getId()];
 }
 
 test('client API accepts the native session nonce after the dispatcher strips it from parameters', function (): void {
@@ -86,7 +86,7 @@ test('client module route exposes only owned invoice onboarding data', function 
 });
 
 test('ordinary gateway checkout needs no recurring consent for an authenticated owner', function (): void {
-    $ctx = mollieOnboarding(molliePaymentContext());
+    $ctx = molliePaymentContext();
     $adapter = $ctx->gatewayService->getPaymentAdapter($ctx->gateway, $ctx->invoice);
     $html = $adapter->getHtml(new stdClass(), $ctx->invoice->getId(), false);
     expect($html)->toContain('window.location.assign', 'https://www.mollie.com/checkout/')
@@ -118,7 +118,8 @@ test('client one-time choice rejects ambiguous gateway configuration before prov
         ->and($ctx->requests)->toBeEmpty()->and($ctx->customerRequests)->toBeEmpty();
 });
 
-test('client template renders native filters CSRF and an unchecked explicit consent control', function (): void {
+function mollieRenderOnboarding(array $data = []): string
+{
     $module = dirname(__DIR__, 2);
     $di = Tests\Helpers\container();
     $twig = new Twig\Environment(new Twig\Loader\ChainLoader([
@@ -132,13 +133,20 @@ test('client template renders native filters CSRF and an unchecked explicit cons
         FOSSBilling\Core\Twig\Extension\FOSSBillingExtension::class => static fn () => new FOSSBilling\Core\Twig\Extension\FOSSBillingExtension($di),
     ]));
     $twig->addGlobal('app_area', 'client');
-    $html = $twig->render('mod_molliepayments_onboarding.html.twig', ['CSRFToken' => 'disposable-nonce',
-        'onboarding' => ['invoice_id' => 1, 'invoice_hash' => 'disposable', 'status' => 'not_started', 'consent_version' => PaymentService::CONSENT_VERSION, 'consent_text' => PaymentService::CONSENT_TEXT]]);
+
+    return $twig->render('mod_molliepayments_onboarding.html.twig', ['CSRFToken' => 'disposable-nonce',
+        'onboarding' => $data + ['order_id' => '7', 'order_title' => 'Recurring service', 'period_title' => 'Every month', 'amount' => '12.34', 'currency' => 'EUR', 'can_resume' => false, 'can_pay' => true, 'can_verify' => true, 'consent_digest' => 'disposable-digest', 'invoice_id' => 1, 'invoice_hash' => 'disposable', 'status' => 'not_started', 'consent_version' => PaymentService::CONSENT_VERSION, 'consent_text' => PaymentService::CONSENT_TEXT]]);
+}
+
+test('client template renders native filters CSRF and an unchecked explicit consent control', function (): void {
+    $html = mollieRenderOnboarding();
     $document = new DOMDocument();
     @$document->loadHTML($html);
     $xpath = new DOMXPath($document);
     expect($xpath->query('//input[@type="checkbox" and @name="consent" and not(@checked) and @required]')->length)->toBe(1)
-        ->and($html)->toContain('/api/client/molliepayments/onboarding_start', '/api/client/molliepayments/onboarding_verify', '/api/client/molliepayments/checkout', 'Pay once without automatic payment authorization', 'disposable-nonce', 'actual invoices', '/invoice/disposable');
+        ->and($xpath->query('//style | //*[@style] | //link[@rel="stylesheet"]')->length)->toBe(0)
+        ->and($html)->toContain('col-12 col-lg-8', 'form-check-input', 'role="status"', 'aria-live="polite"', 'buttons.forEach', 'if (busy) return', 'Recurring service', '12.34 EUR')
+        ->and($html)->toContain('/api/client/molliepayments/onboarding_start', '/api/client/molliepayments/onboarding_verify', '/api/client/molliepayments/checkout', 'Pay once without future authorization', 'disposable-nonce', 'actual invoices', '/invoice/disposable');
 });
 
 test('client template fallback supports symlinked installations and native theme precedence', function (): void {
@@ -154,3 +162,37 @@ test('client template fallback supports symlinked installations and native theme
     $loader->setTemplate('mod_molliepayments_onboarding.html.twig', 'Client theme override');
     expect($registered->createClientEnvironment(new DebugBar\StandardDebugBar())->render('mod_molliepayments_onboarding.html.twig'))->toBe('Client theme override');
 });
+
+test('direct API refuses ineligible or changed displayed authorization before provider activity', function (string $case): void {
+    $ctx = mollieOnboarding(molliePaymentContext());
+    $params = mollieConsentParams($ctx);
+    if ($case === 'custom') {
+        $ctx->item->setType(Box\Mod\Invoice\Entity\InvoiceItem::TYPE_CUSTOM);
+    } elseif ($case === 'changed') {
+        $ctx->order->setTitle('Changed order authorization');
+    } else {
+        $params['consent_digest'] = 'tampered';
+    }
+    $ctx->em->flush();
+    $api = mollieClientApi($ctx, $params);
+    expect(fn () => $api->onboarding_start($params))->toThrow(Payment_Exception::class)
+        ->and($ctx->requests)->toBeEmpty()->and($ctx->customerRequests)->toBeEmpty();
+})->with(['custom', 'changed', 'digest']);
+
+test('client UI translates payment states and only offers appropriate actions', function (string $state, bool $pay, string $message): void {
+    $html = mollieRenderOnboarding(['status' => $state, 'can_pay' => $pay, 'can_verify' => !$pay]);
+    $document = new DOMDocument();
+    @$document->loadHTML($html);
+    $xpath = new DOMXPath($document);
+    expect($html)->toContain($message)->not->toContain('Onboarding status:', '>pending_mandate<', '>manual_review<')
+        ->and($xpath->query('//form[@id="molliepayments-onboarding"]')->length)->toBe($pay ? 1 : 0)
+        ->and($xpath->query('//form[@id="molliepayments-oneoff"]')->length)->toBe($pay ? 1 : 0);
+})->with([
+    ['pending_payment', false, 'first payment has already started'],
+    ['paid', false, 'No further payment is needed'],
+    ['ready', false, 'suitable mandate has been verified'],
+    ['pending_mandate', false, 'still checking'],
+    ['payment_failed', true, 'choose how to try again'],
+    ['manual_review', false, 'support review'],
+    ['mandate_invalid', false, 'mandate is not valid'],
+]);

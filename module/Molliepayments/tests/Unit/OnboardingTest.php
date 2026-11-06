@@ -29,7 +29,7 @@ test('first payment commits consent and verified customer identity before its ex
         $row = mollieAttempt($ctx);
         expect($ctx->db->isTransactionActive())->toBeFalse()
             ->and($row['consent_version'])->toBe(PaymentService::CONSENT_VERSION)
-            ->and($row['consent_text'])->toBe(PaymentService::CONSENT_TEXT)
+            ->and($row['consent_text'])->toBe($ctx->payments->onboarding($ctx->invoice->getId())['consent_text'])
             ->and((int) $row['consent_accepted_at'])->toBeGreaterThanOrEqual(time() - 5)
             ->and($row['onboarding_status'])->toBe('pending_payment')
             ->and($row['lease'])->not->toBeNull()

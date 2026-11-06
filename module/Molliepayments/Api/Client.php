@@ -25,7 +25,19 @@ final class Client extends AbstractApi
             throw new \Payment_Exception('Authorization text changed. Reload the onboarding page.', [], 409);
         }
 
+        $page = $this->getService()->payments()->onboarding($this->invoiceId($data));
+        if (!is_string($data['consent_digest'] ?? null) || !hash_equals($page['consent_digest'], $data['consent_digest'])) {
+            throw new \Payment_Exception('Order authorization changed. Reload the onboarding page.', [], 409);
+        }
+
         return ['checkout_url' => $this->getService()->payments()->firstCheckout($this->invoiceId($data), $consent)];
+    }
+
+    public function checkout_resume(array $data): array
+    {
+        $this->authorizeWrite();
+
+        return ['checkout_url' => $this->getService()->payments()->resumeCheckout($this->invoiceId($data))];
     }
 
     public function onboarding_verify(array $data): array

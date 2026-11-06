@@ -23,3 +23,6 @@ Until core supports this, MolliePayments uses existing `processed` with amount `
 ## Provider Customer mappings
 
 Issue #7 adds only Mollie-specific Customer identifiers, creation identity and recovery state. These are provider integration responsibilities and do not require core accounting or client lifecycle changes. No generic customer synchronization, consent system or recurring scheduler is implemented. Issue #8 must consume the internal Customer service explicitly; mandate authorization and first-payment orchestration remain separate work.
+
+
+Issue #8 review: recurring-order recognition and order-scoped mandate authorization are provider integration concerns and use existing native invoice/order entities. No invoice calculation, renewal scheduler or generic subscription mechanism is added. Fixed-total native subscription eligibility is deliberately kept separate. The observed authenticated CSRF/session mismatch also affects a native API and remains a host investigation; this adapter preserves security rather than implementing a replacement session/nonce mechanism. See `docs/VALIDATION.md`.

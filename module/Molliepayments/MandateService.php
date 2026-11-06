@@ -43,6 +43,15 @@ final class MandateService
                 || !isset($payment->profileId) || $payment->profileId !== $payload['metadata']['profile_id']) {
                 throw new \UnexpectedValueException();
             }
+            $invoice = $this->di['em']->find(\Box\Mod\Invoice\Entity\Invoice::class, (int) $attempt['invoice_id']);
+            $scope = $invoice === null ? null : Support\RecurringEligibility::scope($this->di['em'], $invoice);
+            if ($attempt['consent_version'] !== PaymentService::CONSENT_VERSION || $scope === null
+                || ($payload['metadata']['order_id'] ?? null) !== $scope['order_id']
+                || ($payload['metadata']['order_period'] ?? null) !== $scope['period']) {
+                $changes['onboarding_status'] = 'manual_review';
+
+                return;
+            }
             (new CustomerService($this->di, $this->clientFactory))->verifyOnboardingCustomer($attemptId);
             $mandateId = $payment->mandateId;
             $link = $payment->_links->mandate->href ?? null;
