@@ -65,6 +65,9 @@ test('client API rejects unsafe writes before any customer or payment request', 
     expect(fn () => $api->onboarding_start($params))->toThrow(Payment_Exception::class)
         ->and($ctx->requests)->toBeEmpty()->and($ctx->customerRequests)->toBeEmpty();
     expect(fn () => $api->onboarding_verify($params))->toThrow(Payment_Exception::class);
+    if (!in_array($case, ['consent_missing', 'consent_false', 'consent_version'], true)) {
+        expect(fn () => $api->checkout($params))->toThrow(Payment_Exception::class);
+    }
 })->with(['csrf_missing', 'csrf_wrong', 'csrf_array', 'cookie', 'get', 'guest', 'consent_missing', 'consent_false', 'consent_version', 'invoice', 'owner']);
 
 test('client module route exposes only owned invoice onboarding data', function (): void {
@@ -80,6 +83,41 @@ test('client module route exposes only owned invoice onboarding data', function 
     $ctx->invoice->setClientId(999);
     $ctx->em->flush();
     expect(fn () => $controller->get_onboarding($app, $ctx->invoice->getId()))->toThrow(Payment_Exception::class, 'owner authentication');
+});
+
+test('gateway offers consent before creating any payment for an authenticated owner', function (): void {
+    $ctx = mollieOnboarding(molliePaymentContext());
+    $adapter = $ctx->gatewayService->getPaymentAdapter($ctx->gateway, $ctx->invoice);
+    $html = $adapter->getHtml(new stdClass(), $ctx->invoice->getId(), false);
+    expect($html)->toContain('window.location.assign', '/molliepayments/onboarding/' . $ctx->invoice->getId())
+        ->not->toContain($ctx->key)
+        ->and($ctx->requests)->toBeEmpty()->and($ctx->customerRequests)->toBeEmpty()
+        ->and($ctx->db->fetchOne('SELECT COUNT(*) FROM molliepayments_attempt'))->toBe(0);
+    $ctx->invoice->setClientId(999);
+    $ctx->em->flush();
+    expect(fn () => $adapter->getHtml(new stdClass(), $ctx->invoice->getId(), false))->toThrow(Payment_Exception::class, 'owner authentication');
+});
+
+test('client can pay once without consent and cannot override saved gateway context', function (): void {
+    $ctx = mollieOnboarding(molliePaymentContext());
+    $params = ['CSRFToken' => 'disposable-nonce', 'invoice_id' => $ctx->invoice->getId(), 'gateway_id' => 999, 'environment' => 'live'];
+    $api = mollieClientApi($ctx, $params);
+    expect($api->checkout($params)['checkout_url'])->toContain('https://www.mollie.com/checkout/')
+        ->and($ctx->payload['sequenceType'])->toBe('oneoff')
+        ->and($ctx->payload['metadata']['environment'])->toBe('test')
+        ->and($ctx->customerRequests)->toBeEmpty()
+        ->and($ctx->db->fetchOne('SELECT consent_version FROM molliepayments_attempt'))->toBeNull();
+});
+
+test('client one-time choice rejects ambiguous gateway configuration before provider calls', function (): void {
+    $ctx = mollieOnboarding(molliePaymentContext());
+    $duplicate = clone $ctx->gateway;
+    $ctx->em->persist($duplicate);
+    $ctx->em->flush();
+    $params = ['CSRFToken' => 'disposable-nonce', 'invoice_id' => $ctx->invoice->getId()];
+    $api = mollieClientApi($ctx, $params);
+    expect(fn () => $api->checkout($params))->toThrow(Payment_Exception::class, 'Exactly one')
+        ->and($ctx->requests)->toBeEmpty()->and($ctx->customerRequests)->toBeEmpty();
 });
 
 test('client template renders native filters CSRF and an unchecked explicit consent control', function (): void {
@@ -102,7 +140,7 @@ test('client template renders native filters CSRF and an unchecked explicit cons
     @$document->loadHTML($html);
     $xpath = new DOMXPath($document);
     expect($xpath->query('//input[@type="checkbox" and @name="consent" and not(@checked) and @required]')->length)->toBe(1)
-        ->and($html)->toContain('/api/client/molliepayments/onboarding_start', '/api/client/molliepayments/onboarding_verify', 'disposable-nonce', 'actual invoices', '/invoice/disposable');
+        ->and($html)->toContain('/api/client/molliepayments/onboarding_start', '/api/client/molliepayments/onboarding_verify', '/api/client/molliepayments/checkout', 'Pay once without automatic payment authorization', 'disposable-nonce', 'actual invoices', '/invoice/disposable');
 });
 
 test('client template fallback supports symlinked installations and native theme precedence', function (): void {

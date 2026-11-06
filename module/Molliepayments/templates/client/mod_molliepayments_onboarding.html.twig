@@ -13,7 +13,12 @@
     </div>
     <button class="btn btn-primary" type="submit">Authorize and pay this invoice</button>
 </form>
-<p><a href="{{ ('invoice/' ~ onboarding.invoice_hash)|url }}">Pay this invoice without automatic payment authorization</a></p>
+<form id="molliepayments-oneoff" method="post" action="{{ 'molliepayments/checkout'|api_url }}">
+    <input type="hidden" name="CSRFToken" value="{{ CSRFToken }}">
+    <input type="hidden" name="invoice_id" value="{{ onboarding.invoice_id }}">
+    <button class="btn btn-secondary" type="submit">Pay once without automatic payment authorization</button>
+</form>
+<p><a href="{{ ('invoice/' ~ onboarding.invoice_hash)|url }}">Return to invoice</a></p>
 <form id="molliepayments-verify" method="post" action="{{ 'molliepayments/onboarding_verify'|api_url }}">
     <input type="hidden" name="CSRFToken" value="{{ CSRFToken }}">
     <input type="hidden" name="invoice_id" value="{{ onboarding.invoice_id }}">
@@ -21,7 +26,7 @@
 </form>
 <p id="molliepayments-result" role="status" aria-live="polite"></p>
 <script>
-for (const id of ['molliepayments-onboarding', 'molliepayments-verify']) {
+for (const id of ['molliepayments-onboarding', 'molliepayments-oneoff', 'molliepayments-verify']) {
     document.getElementById(id).addEventListener('submit', async function (event) {
         event.preventDefault();
         const button = this.querySelector('button');

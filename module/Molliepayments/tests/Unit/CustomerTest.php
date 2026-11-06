@@ -102,7 +102,7 @@ test('customer rejects rotated credentials and changed profile without rebinding
     mollieResolveCustomer($ctx);
     $ctx->profileId = 'pfl_other';
     expect(fn () => mollieResolveCustomer($ctx, false, true))->toThrow(Payment_Exception::class, 'profile context changed');
-    $ctx->gateway->setConfig(json_encode(['test_api_key' => mollieDummyKey('test')]));
+    $ctx->gateway->setConfig(mollieGatewayValue('config', ['test_api_key' => mollieDummyKey('test')]));
     $ctx->em->flush();
     $before = count($ctx->customerRequests);
     expect(fn () => mollieResolveCustomer($ctx))->toThrow(Payment_Exception::class, 'credential context changed')
@@ -134,7 +134,7 @@ test('customer denies cross client and unauthenticated access before network or 
 test('customer test and live mappings stay isolated and select only their saved key', function (): void {
     $ctx = mollieCustomers(molliePaymentContext());
     mollieResolveCustomer($ctx);
-    $ctx->gateway->setTestMode(false)->setConfig(json_encode(['api_key' => mollieDummyKey('live'), 'test_api_key' => $ctx->key]));
+    $ctx->gateway->setTestMode(false)->setConfig(mollieGatewayValue('config', ['api_key' => mollieDummyKey('live'), 'test_api_key' => $ctx->key]));
     $ctx->em->flush();
     expect(mollieResolveCustomer($ctx, false))->toBeNull();
     // Provider ID must differ between modes, as in the real API.
@@ -330,7 +330,7 @@ test('customer unresolved creation cannot replay with a rotated credential', fun
     expect(fn () => mollieResolveCustomer($ctx))->toThrow(Payment_Exception::class);
     $before = mollieCustomerRow($ctx);
     $requests = count($ctx->customerRequests);
-    $ctx->gateway->setConfig(json_encode(['test_api_key' => mollieDummyKey('test')]));
+    $ctx->gateway->setConfig(mollieGatewayValue('config', ['test_api_key' => mollieDummyKey('test')]));
     $ctx->em->flush();
     expect(fn () => mollieResolveCustomer($ctx))->toThrow(Payment_Exception::class, 'credential context changed')
         ->and(mollieCustomerRow($ctx))->toBe($before)

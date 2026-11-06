@@ -10,6 +10,8 @@ An independent Mollie payment gateway and companion extension for FOSSBilling, u
 
 MolliePayments owns provider communication and payment-attempt idempotency. FOSSBilling owns balances, invoice pricing/tax, accounting and activation. Existing account credit is never reserved or split by this adapter; unsupported partial invoice allocations fail closed.
 
+To give consent, log in as the invoice owner and select MolliePayments when paying an eligible invoice. The module opens a choice page with an unchecked consent box and **Authorize and pay this invoice**. **Pay once without automatic payment authorization** remains available. Automatic recurring collection is still disabled.
+
 ## Development setup
 
 Requirements: PHP 8.3+, Composer 2, FOSSBilling development baseline `97bb583dd681e311e2d10fe8c648095f2a479878`, and a Mollie Test key for real checkout validation. Published FOSSBilling 0.8.9 is unsupported. CI also tests current upstream `main` with SQLite and MariaDB.

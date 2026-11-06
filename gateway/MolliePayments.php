@@ -62,7 +62,14 @@ class Payment_Adapter_MolliePayments extends Payment_AdapterAbstract
         if ($subscription || filter_var($invoice_id, FILTER_VALIDATE_INT, ['options' => ['min_range' => 1]]) === false) {
             throw new Payment_Exception('MolliePayments requires a valid one-time invoice payment.');
         }
-        $url = $this->payments()->checkout((int) $invoice_id, (int) $this->getParam('gateway_id'));
+        if (($this->di['loggedin_client'] ?? null) instanceof Box\Mod\Client\Entity\Client) {
+            // Let the owner choose before reserving a oneoff payment, which
+            // would otherwise conflict with a consenting first payment.
+            $this->payments()->onboarding((int) $invoice_id);
+            $url = $this->di['url']->link('molliepayments/onboarding/' . (int) $invoice_id);
+        } else {
+            $url = $this->payments()->checkout((int) $invoice_id, (int) $this->getParam('gateway_id'));
+        }
         if ($url === null) {
             return '<p>Mollie is processing this payment. Return to the invoice to check its current status.</p>';
         }

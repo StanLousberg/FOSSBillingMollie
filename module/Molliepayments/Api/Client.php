@@ -10,6 +10,13 @@ use FOSSBilling\Core\Http\CookieNames;
 
 final class Client extends AbstractApi
 {
+    public function checkout(array $data): array
+    {
+        $this->authorizeWrite();
+
+        return ['checkout_url' => $this->getService()->payments()->oneTimeCheckout($this->invoiceId($data))];
+    }
+
     public function onboarding_start(array $data): array
     {
         $this->authorizeWrite();

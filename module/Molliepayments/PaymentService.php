@@ -144,6 +144,18 @@ final class PaymentService
         return $this->checkoutPayment($invoiceId, $gatewayId);
     }
 
+    /** The client choice uses saved gateway configuration, never browser IDs. */
+    public function oneTimeCheckout(int $invoiceId): ?string
+    {
+        $this->ownedInvoice($invoiceId);
+        $gateways = $this->di['em']->getRepository(PayGateway::class)->findBy(['gateway' => 'MolliePayments']);
+        if (count($gateways) !== 1) {
+            throw new \Payment_Exception('Exactly one MolliePayments gateway must be configured for checkout.');
+        }
+
+        return $this->checkout($invoiceId, (int) $gateways[0]->getId());
+    }
+
     private function checkoutPayment(int $invoiceId, int $gatewayId, ?array $customer = null): ?string
     {
         $invoice = $this->invoice($invoiceId);

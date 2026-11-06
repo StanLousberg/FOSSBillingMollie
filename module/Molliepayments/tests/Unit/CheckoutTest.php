@@ -175,7 +175,7 @@ test('gateway and environment switches cannot replay an existing attempt', funct
     $ctx->payments->checkout($ctx->invoice->getId(), $ctx->gateway->getId());
     if ($environment) {
         $ctx->gateway->setTestMode(false);
-        $ctx->gateway->setConfig(json_encode(['api_key' => mollieDummyKey('live')]));
+        $ctx->gateway->setConfig(mollieGatewayValue('config', ['api_key' => mollieDummyKey('live')]));
     } else {
         $ctx->gateway->setGateway('Custom');
     }

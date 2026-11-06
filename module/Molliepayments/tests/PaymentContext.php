@@ -80,9 +80,9 @@ function molliePaymentContext(string $environment = 'test', ?string $databasePat
         $ctx->gateway->setEnabled(true);
         $ctx->gateway->setAllowSingle(true);
         $ctx->gateway->setTestMode($environment === 'test');
-        $ctx->gateway->setAcceptedCurrencies('["EUR"]');
+        $ctx->gateway->setAcceptedCurrencies(mollieGatewayValue('acceptedCurrencies', ['EUR']));
         $ctx->key = mollieDummyKey($environment);
-        $ctx->gateway->setConfig(json_encode([($environment === 'test' ? 'test_api_key' : 'api_key') => $ctx->key]));
+        $ctx->gateway->setConfig(mollieGatewayValue('config', [($environment === 'test' ? 'test_api_key' : 'api_key') => $ctx->key]));
         $ctx->em->persist($ctx->gateway);
         $ctx->em->flush();
         $ctx->invoice = new Invoice();
@@ -108,7 +108,7 @@ function molliePaymentContext(string $environment = 'test', ?string $databasePat
         $ctx->gateway = $ctx->em->getRepository(PayGateway::class)->findOneBy([]);
         $ctx->invoice = $ctx->em->getRepository(Invoice::class)->findOneBy([]);
         $ctx->item = $ctx->em->getRepository(InvoiceItem::class)->findOneBy([]);
-        $ctx->key = json_decode($ctx->gateway->getConfig(), true)['test_api_key'];
+        $ctx->key = mollieGatewayConfig($ctx->gateway)['test_api_key'];
         $request = $ctx->db->fetchOne('SELECT request FROM molliepayments_attempt LIMIT 1');
         $ctx->payload = $request ? json_decode($request, true) : null;
     }
