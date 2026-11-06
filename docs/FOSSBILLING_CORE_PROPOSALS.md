@@ -12,6 +12,8 @@ Expose an invoice service returning currency, total, allocated amount, outstandi
 
 Current `getTotalWithTax()` reports the total; `tryPayWithCredits()` settles a fully covered invoice but dispatches events/tasks before a surrounding transaction commits. Per-item `markAsPaid()` charging can differ from invoice-level VAT rounding. A common API would remove the remaining small settlement bridge from adapters without sacrificing atomicity.
 
+The deferred settlement contract should also specify when row locks are acquired relative to consistent reads. On MariaDB with snapshot isolation enabled, a snapshot established before locking provider state can make a later write fail when another worker updates that state. MolliePayments now acquires its native invoice lock and module attempt lock before invoice refresh; this is confined to its existing provider-state bridge. A reusable host settlement API should preserve that ordering without taking responsibility for Mollie-specific mandate metadata. No core modification is required for this fix.
+
 ## Native unsuccessful transaction outcomes
 
 Separate callback processing status from financial outcome. Represent canceled, failed and expired provider payments as ordinary unsuccessful results with zero money received, distinguishable from technical exceptions. Define API/UI labels, retry behavior, duplicate callback handling and report filters. Preserve existing transaction status compatibility and immutable payment history.

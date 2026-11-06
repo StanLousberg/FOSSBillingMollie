@@ -382,6 +382,48 @@ test('MariaDB first payment webhook workers settle once and verify mandate witho
         ->and(mollieAttempt($check)['onboarding_status'])->toBe('ready');
 });
 
+test('MariaDB settlement locks the attempt before invoice refresh can establish a snapshot', function (): void {
+    $ctx = mollieOnboarding(mollieMariaContext());
+    mollieFirst($ctx);
+    $attemptId = mollieAttempt($ctx)['id'];
+    $observer = Doctrine\DBAL\DriverManager::getConnection($ctx->connectionParameters);
+    $manager = $ctx->em;
+    $refreshes = 0;
+    $attemptLocked = false;
+    $proxy = Mockery::mock($manager);
+    $proxy->shouldReceive('refresh')->andReturnUsing(static function ($entity, $mode = Doctrine\DBAL\LockMode::NONE) use ($ctx, $manager, $observer, $attemptId, &$refreshes, &$attemptLocked): void {
+        $manager->refresh($entity, $mode);
+        if (!$entity instanceof Invoice || !$ctx->db->isTransactionActive() || ++$refreshes !== 2) {
+            return;
+        }
+        // Run a competing mandate-metadata writer precisely between the
+        // settlement invoice refresh and the old attempt-lock location.
+        $observer->beginTransaction();
+        try {
+            $observer->fetchOne('SELECT id FROM molliepayments_attempt WHERE id = ? FOR UPDATE NOWAIT', [$attemptId]);
+            $observer->update('molliepayments_attempt', ['onboarding_status' => 'pending_mandate'], ['id' => $attemptId]);
+            $observer->commit();
+        } catch (Doctrine\DBAL\Exception\LockWaitTimeoutException) {
+            $attemptLocked = true;
+            $observer->rollBack();
+        }
+    });
+    unset($ctx->di['em']);
+    $ctx->di['em'] = $proxy;
+    try {
+        unset($ctx->di['loggedin_client']);
+        $ctx->status = 'paid';
+        $transaction = mollieWebhook($ctx);
+        expect($attemptLocked)->toBeTrue()
+            ->and((int) mollieAttempt($ctx)['settled_transaction_id'])->toBe($transaction->getId())
+            ->and(mollieAttempt($ctx)['onboarding_status'])->toBe('ready')
+            ->and((int) $ctx->db->fetchOne("SELECT COUNT(*) FROM client_balance WHERE type = 'transaction'"))->toBe(1);
+    } finally {
+        $observer->close();
+        $ctx->db->close();
+    }
+});
+
 test('MariaDB first payment lost response reuses durable consent and recovers missing mandate read only', function (): void {
     $ctx = mollieOnboarding(mollieMariaContext());
     $response = $ctx->responses[Mollie\Api\Http\Requests\CreatePaymentRequest::class];

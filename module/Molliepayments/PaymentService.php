@@ -322,8 +322,7 @@ final class PaymentService
         $attempt = $this->synchronize($attempt, $payment);
         if ($attempt['status'] !== 'paid') {
             $this->attempts->connection->transactional(function () use ($tx, $attempt): void {
-                $this->lockInvoice($this->invoice((int) $attempt['invoice_id']));
-                $current = $this->attempts->lock($attempt['id']);
+                [, $current] = $this->lockInvoiceAttempt($attempt);
                 $this->di['em']->refresh($tx);
                 if ($tx->getStatus() !== Transaction::STATUS_PROCESSED && $current['status'] !== 'paid') {
                     $terminal = in_array($current['status'], self::TERMINAL_STATUSES, true);
@@ -360,9 +359,7 @@ final class PaymentService
     private function settle(array $attempt, Transaction $tx): bool
     {
         return $this->attempts->connection->transactional(function () use ($attempt, $tx): bool {
-            $invoice = $this->invoice((int) $attempt['invoice_id']);
-            $this->lockInvoice($invoice);
-            $attempt = $this->attempts->lock($attempt['id']);
+            [$invoice, $attempt] = $this->lockInvoiceAttempt($attempt);
             $this->di['em']->refresh($tx);
             if ((int) $tx->getGateway()?->getId() !== (int) $attempt['gateway_id']
                 || (int) $tx->getInvoice()?->getId() !== (int) $attempt['invoice_id']) {
@@ -428,9 +425,7 @@ final class PaymentService
         $this->validatePayment($attempt, $payment);
 
         return $this->attempts->connection->transactional(function () use ($attempt, $payment): array {
-            $invoice = $this->invoice((int) $attempt['invoice_id']);
-            $this->lockInvoice($invoice);
-            $current = $this->attempts->lock($attempt['id']);
+            [, $current] = $this->lockInvoiceAttempt($attempt);
             $status = $this->validatePayment($current, $payment);
             // A delayed pre-payment GET must never overwrite a verified paid state.
             if ($current['status'] === 'paid' && $status !== 'paid') {
@@ -559,6 +554,19 @@ final class PaymentService
     {
         $this->invoiceService()->lockInvoiceState($invoice);
         $this->di['em']->refresh($invoice);
+    }
+
+    /** Lock both rows before any consistent read can establish a stale snapshot. */
+    private function lockInvoiceAttempt(array $attempt): array
+    {
+        // getReference avoids a SELECT before the native invoice lock, including
+        // when this EntityManager has not loaded the invoice yet.
+        $invoice = $this->di['em']->getReference(Invoice::class, (int) $attempt['invoice_id']);
+        $this->invoiceService()->lockInvoiceState($invoice);
+        $current = $this->attempts->lock($attempt['id']);
+        $this->di['em']->refresh($invoice);
+
+        return [$invoice, $current];
     }
 
     private function assertPayable(Invoice $invoice): void

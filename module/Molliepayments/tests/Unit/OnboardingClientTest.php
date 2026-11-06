@@ -85,17 +85,15 @@ test('client module route exposes only owned invoice onboarding data', function 
     expect(fn () => $controller->get_onboarding($app, $ctx->invoice->getId()))->toThrow(Payment_Exception::class, 'owner authentication');
 });
 
-test('gateway offers consent before creating any payment for an authenticated owner', function (): void {
+test('ordinary gateway checkout needs no recurring consent for an authenticated owner', function (): void {
     $ctx = mollieOnboarding(molliePaymentContext());
     $adapter = $ctx->gatewayService->getPaymentAdapter($ctx->gateway, $ctx->invoice);
     $html = $adapter->getHtml(new stdClass(), $ctx->invoice->getId(), false);
-    expect($html)->toContain('window.location.assign', '/molliepayments/onboarding/' . $ctx->invoice->getId())
-        ->not->toContain($ctx->key)
-        ->and($ctx->requests)->toBeEmpty()->and($ctx->customerRequests)->toBeEmpty()
-        ->and($ctx->db->fetchOne('SELECT COUNT(*) FROM molliepayments_attempt'))->toBe(0);
-    $ctx->invoice->setClientId(999);
-    $ctx->em->flush();
-    expect(fn () => $adapter->getHtml(new stdClass(), $ctx->invoice->getId(), false))->toThrow(Payment_Exception::class, 'owner authentication');
+    expect($html)->toContain('window.location.assign', 'https://www.mollie.com/checkout/')
+        ->not->toContain($ctx->key, '/molliepayments/onboarding/', 'consent')
+        ->and($ctx->payload['sequenceType'])->toBe('oneoff')
+        ->and($ctx->customerRequests)->toBeEmpty()
+        ->and($ctx->db->fetchOne('SELECT consent_version FROM molliepayments_attempt'))->toBeNull();
 });
 
 test('client can pay once without consent and cannot override saved gateway context', function (): void {
