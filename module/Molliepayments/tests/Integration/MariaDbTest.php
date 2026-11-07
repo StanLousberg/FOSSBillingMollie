@@ -5,7 +5,7 @@ declare(strict_types=1);
 use Box\Mod\Invoice\Entity\Invoice;
 use Doctrine\DBAL\Tools\DsnParser;
 
-require_once dirname(__DIR__) . '/PaymentContext.php';
+require_once dirname(__DIR__) . '/ClientContext.php';
 
 beforeEach(function (): void {
     if (!getenv('MOLLIEPAYMENTS_MYSQL_URL')) {
@@ -521,3 +521,89 @@ test('MariaDB module DATETIME and native timestamps do not inherit database sess
         date_default_timezone_set($previous);
     }
 })->with(['UTC', 'Europe/Amsterdam']);
+
+test('MariaDB checkout modes apply to native one-time first-payment and cart API paths', function (string $mode, string $path): void {
+    $ctx = mollieOnboarding(mollieMariaContext());
+    $ctx->invoice->setGateway($ctx->gateway);
+    mollieSetPaymentMode($ctx, $mode);
+    $checkout = match ($path) {
+        'oneoff' => fn () => $ctx->payments->checkout($ctx->invoice->getId(), $ctx->gateway->getId()),
+        'first' => fn () => mollieFirst($ctx),
+        'cart' => fn () => mollieClientApi($ctx, $params = mollieCartParams($ctx), action: 'cart_checkout')->cart_checkout($params),
+    };
+    if (!Box\Mod\Molliepayments\Support\PaymentMode::resolve($mode)->allows($path === 'oneoff' ? 'oneoff' : 'first')) {
+        expect($checkout)->toThrow(Payment_Exception::class)
+            ->and((int) $ctx->db->fetchOne('SELECT COUNT(*) FROM molliepayments_attempt'))->toBe(0)
+            ->and((int) $ctx->db->fetchOne('SELECT COUNT(*) FROM molliepayments_customer'))->toBe(0);
+    } else {
+        $checkout();
+        $before = mollieAttempt($ctx);
+        $ctx->status = 'paid';
+        mollieWebhook($ctx);
+        mollieWebhook($ctx);
+        expect($ctx->invoice->getStatus())->toBe('paid')
+            ->and((int) $ctx->db->fetchOne("SELECT COUNT(*) FROM client_balance WHERE type = 'transaction'"))->toBe(1)
+            ->and(mollieAttempt($ctx)['request'])->toBe($before['request']);
+        if ($path !== 'oneoff') {
+            expect(mollieAttempt($ctx)['onboarding_status'])->toBe('ready')
+                ->and(json_decode($before['request'], true)['metadata']['consent_source'])->toBe($path === 'cart' ? 'cart_checkout' : 'onboarding');
+        }
+    }
+})->with(['both', 'one_time_only', 'recurring_only'])->with(['oneoff', 'first', 'cart']);
+
+test('MariaDB cart API rejects consent and ownership bypasses without reserving payment state', function (string $case): void {
+    $ctx = mollieOnboarding(mollieMariaContext());
+    $ctx->invoice->setGateway($ctx->gateway);
+    $ctx->em->flush();
+    $params = mollieCartParams($ctx);
+    if ($case === 'csrf') {
+        $params['CSRFToken'] = 'wrong';
+    } elseif ($case === 'consent') {
+        $params['consent'] = false;
+    } elseif ($case === 'version') {
+        $params['consent_version'] = 'old';
+    } elseif ($case === 'owner') {
+        // A real FK-valid different owner, rather than bypassing the database constraint.
+        $client = clone $ctx->client;
+        $client->setEmail('other-disposable@example.invalid');
+        $ctx->em->persist($client);
+        $ctx->em->flush();
+        $ctx->invoice->setClientId($client->getId());
+    } elseif ($case === 'mixed') {
+        $item = clone $ctx->item;
+        $item->setType(Box\Mod\Invoice\Entity\InvoiceItem::TYPE_CUSTOM);
+        $ctx->em->persist($item);
+    }
+    $ctx->em->flush();
+    $api = mollieClientApi($ctx, $params, action: 'cart_checkout');
+    expect(fn () => $api->cart_checkout($params))->toThrow(Payment_Exception::class)
+        ->and((int) $ctx->db->fetchOne('SELECT COUNT(*) FROM molliepayments_attempt'))->toBe(0)
+        ->and((int) $ctx->db->fetchOne('SELECT COUNT(*) FROM molliepayments_customer'))->toBe(0)
+        ->and($ctx->requests)->toBeEmpty()->and($ctx->customerRequests)->toBeEmpty();
+})->with(['csrf', 'consent', 'version', 'owner', 'mixed']);
+
+test('MariaDB concurrent cart consent calls preserve one original authorization source', function (): void {
+    $ctx = mollieOnboarding(mollieMariaContext());
+    $ctx->invoice->setGateway($ctx->gateway);
+    $ctx->em->flush();
+    mollieResolveCustomer($ctx);
+    $ctx->db->close();
+    $job = static function (): void {
+        $child = mollieOnboarding(mollieMariaContext(false));
+        $params = mollieCartParams($child);
+        try {
+            mollieClientApi($child, $params, action: 'cart_checkout')->cart_checkout($params);
+        } catch (Payment_Exception $error) {
+            if (!str_contains($error->getMessage(), 'already checking') && !str_contains($error->getMessage(), 'already in progress')) {
+                throw $error;
+            }
+        }
+        $child->db->close();
+    };
+    mollieMariaWorkers([$job, $job]);
+    $check = mollieOnboarding(mollieMariaContext(false));
+    $row = mollieAttempt($check);
+    expect((int) $check->db->fetchOne('SELECT COUNT(*) FROM molliepayments_attempt'))->toBe(1)
+        ->and(json_decode($row['request'], true)['metadata']['consent_source'])->toBe('cart_checkout')
+        ->and($row['consent_accepted_at'])->not->toBeNull();
+});

@@ -48,3 +48,8 @@ The [2026-11-07 audit](FOSSBILLING_NATIVE_REUSE_AUDIT.md) rechecked these propos
 ## Read-only renewal quotes
 
 A native read-only renewal quote including applicable taxes, renewal discounts and quantities would benefit every gateway's authorization page. Core currently exposes renewal line and promo resolvers but no complete read-only tax-inclusive renewal preview. MolliePayments composes those existing resolvers for an explicitly tax-exclusive current price and keeps the first invoice's tax-inclusive total separate. It does not generate temporary invoices, project tax or add a billing calculator. Actual future renewal invoices determine collection amounts.
+
+
+## Gateway checkout policy and theme consent
+
+Core already persists arbitrary adapter config, renders native select fields and returns `invoice_hash`/selected gateway after cart checkout. These are reused without changes. MolliePayments' mode only selects between provider `oneoff` and consent-backed `first` invoice payments; it is not a generic subscription or cart implementation. Cart themes may call an authenticated module endpoint after native checkout instead of triggering the ordinary invoice payment callback. Eligibility, explicit consent/source, Customer mapping and mandate verification remain provider integration concerns. No Core payment-mode API, cart fork or additional persistence is needed for this change. Native credits/free orders and non-Mollie gateway policies remain outside this adapter.

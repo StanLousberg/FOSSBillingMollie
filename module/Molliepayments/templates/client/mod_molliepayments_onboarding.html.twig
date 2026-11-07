@@ -11,11 +11,17 @@
             <h1 class="h3 mb-3">Recurring payments</h1>
 
             <p class="mb-4">
+                {% if onboarding.payment_mode == 'both' %}
                 Choose how you want to pay for your recurring order.
                 With <strong>Pay once</strong>, you pay this invoice
                 and manually pay each future renewal invoice.
                 With <strong>Authorize and pay</strong>, you can
                 authorize automatic payments for future renewals.
+                {% elseif onboarding.payment_mode == 'recurring_only' %}
+                Authorize future renewal payments for this order and pay this invoice.
+                {% else %}
+                Pay this invoice once. Future renewal invoices are paid manually.
+                {% endif %}
             </p>
 
             <div class="card mb-4">
@@ -74,6 +80,7 @@
 
             {% if onboarding.can_pay %}
 
+                {% if onboarding.can_authorize %}
                 <div class="mb-4">
                     <div class="form-check">
                         <input
@@ -98,8 +105,11 @@
                     </div>
                 </div>
 
+                {% endif %}
+
                 <div class="row g-3 mb-3">
 
+                    {% if onboarding.can_pay_once %}
                     <div class="col-12 col-md-6">
                         <form
                             id="molliepayments-oneoff"
@@ -126,6 +136,8 @@
                         </form>
                     </div>
 
+                    {% endif %}
+                    {% if onboarding.can_authorize %}
                     <div class="col-12 col-md-6">
                         <form
                             id="molliepayments-onboarding"
@@ -162,10 +174,12 @@
                         </form>
                     </div>
 
+                    {% endif %}
                 </div>
 
                 <p class="small text-secondary mb-4">
                     Renewal prices may change following advance notice.
+                    {% if onboarding.can_authorize %}Automatic recurring collection is not yet enabled in this release.{% endif %}
                 </p>
 
             {% endif %}

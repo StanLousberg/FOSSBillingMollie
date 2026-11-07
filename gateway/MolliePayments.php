@@ -20,6 +20,7 @@ class Payment_Adapter_MolliePayments extends Payment_AdapterAbstract
     {
         // Admin configuration validation has no callback URLs. Checkout URLs
         // are resolved afresh by PaymentService through the native host service.
+        Box\Mod\Molliepayments\Support\PaymentMode::resolve($config['payment_mode'] ?? null);
         $this->_config = $config;
         $this->testMode = (bool) ($config['test_mode'] ?? false);
         if (!isset($config['gateway_id'])) {
@@ -43,6 +44,14 @@ class Payment_Adapter_MolliePayments extends Payment_AdapterAbstract
                 'width' => '32px',
             ],
             'form' => [
+                'payment_mode' => ['select', [
+                    'label' => 'Payment mode',
+                    'multiOptions' => [
+                        'both' => 'One-time payments and recurring authorization',
+                        'one_time_only' => 'One-time payments only',
+                        'recurring_only' => 'Recurring authorization only',
+                    ],
+                ]],
                 'api_key' => ['password', [
                     'label' => 'Live API Key (live_xxx)',
                     'secret' => true,

@@ -2,27 +2,9 @@
 
 declare(strict_types=1);
 
-use Box\Mod\Molliepayments\Api\Client as ClientApi;
 use Box\Mod\Molliepayments\PaymentService;
-use Symfony\Component\HttpFoundation\Request;
-use Symfony\Component\HttpFoundation\Session\Session;
-use Symfony\Component\HttpFoundation\Session\Storage\MockArraySessionStorage;
 
-require_once dirname(__DIR__) . '/OnboardingContext.php';
-
-function mollieClientApi(object $ctx, array $params = [], string $method = 'POST'): ClientApi
-{
-    $ctx->di['request'] = Request::create('/api/client/molliepayments/onboarding_start', $method, $params);
-    $session = new Session(new MockArraySessionStorage());
-    $session->set('csrf_token', 'disposable-nonce');
-    $ctx->di['session'] = $session;
-    $api = new ClientApi();
-    $api->setDi($ctx->di);
-    $api->setIdentity($ctx->client);
-    $api->setService($ctx->services['molliepayments']);
-
-    return $api;
-}
+require_once dirname(__DIR__) . '/ClientContext.php';
 
 function mollieConsentParams(object $ctx): array
 {
@@ -135,7 +117,7 @@ function mollieRenderOnboarding(array $data = []): string
     $twig->addGlobal('app_area', 'client');
 
     return $twig->render('mod_molliepayments_onboarding.html.twig', ['CSRFToken' => 'disposable-nonce',
-        'onboarding' => $data + ['company_name' => 'Example Hosting', 'recurring_amount' => '20.00', 'recurring_currency' => 'EUR', 'order_id' => '7', 'order_title' => 'Recurring service', 'period_title' => 'Every month', 'amount' => '12.34', 'currency' => 'EUR', 'can_resume' => false, 'can_pay' => true, 'can_verify' => true, 'consent_digest' => 'disposable-digest', 'invoice_id' => 1, 'invoice_hash' => 'disposable', 'status' => 'not_started', 'consent_version' => PaymentService::CONSENT_VERSION, 'consent_text' => sprintf(PaymentService::CONSENT_TEXT, 'Example Hosting')]]);
+        'onboarding' => $data + ['payment_mode' => 'both', 'can_authorize' => true, 'can_pay_once' => true, 'company_name' => 'Example Hosting', 'recurring_amount' => '20.00', 'recurring_currency' => 'EUR', 'order_id' => '7', 'order_title' => 'Recurring service', 'period_title' => 'Every month', 'amount' => '12.34', 'currency' => 'EUR', 'can_resume' => false, 'can_pay' => true, 'can_verify' => true, 'consent_digest' => 'disposable-digest', 'invoice_id' => 1, 'invoice_hash' => 'disposable', 'status' => 'not_started', 'consent_version' => PaymentService::CONSENT_VERSION, 'consent_text' => sprintf(PaymentService::CONSENT_TEXT, 'Example Hosting')]]);
 }
 
 test('client template renders native filters CSRF and an unchecked explicit consent control', function (): void {
@@ -307,3 +289,26 @@ test('rendered actions follow actual persisted payment state', function (string 
     ['payment_failed', true, false, true], ['pending_mandate', false, false, true],
     ['ready', false, false, true], ['mandate_invalid', false, false, true], ['manual_review', false, false, true],
 ]);
+
+test('onboarding offers only actions allowed by the saved payment mode', function (string $mode, bool $first, bool $oneoff): void {
+    $ctx = mollieOnboarding(molliePaymentContext());
+    mollieSetPaymentMode($ctx, $mode);
+    $page = $ctx->payments->onboarding($ctx->invoice->getId());
+    $document = new DOMDocument();
+    @$document->loadHTML(mollieRenderOnboarding($page));
+    $xpath = new DOMXPath($document);
+    expect($page['payment_mode'])->toBe($mode)
+        ->and($xpath->query('//form[@id="molliepayments-onboarding"]')->length)->toBe($first ? 1 : 0)
+        ->and($xpath->query('//input[@name="consent" and @required and not(@checked)]')->length)->toBe($first ? 1 : 0)
+        ->and($xpath->query('//form[@id="molliepayments-oneoff"]')->length)->toBe($oneoff ? 1 : 0)
+        ->and($xpath->query('//style | //*[@style]')->length)->toBe(0);
+})->with([['both', true, true], ['one_time_only', false, true], ['recurring_only', true, false]]);
+
+test('onboarding refuses a stale form after the saved payment mode changes', function (): void {
+    $ctx = mollieOnboarding(molliePaymentContext());
+    $params = mollieConsentParams($ctx);
+    mollieSetPaymentMode($ctx, 'recurring_only');
+    $api = mollieClientApi($ctx, $params);
+    expect(fn () => $api->onboarding_start($params))->toThrow(Payment_Exception::class, 'authorization changed')
+        ->and($ctx->requests)->toBeEmpty()->and($ctx->customerRequests)->toBeEmpty();
+});

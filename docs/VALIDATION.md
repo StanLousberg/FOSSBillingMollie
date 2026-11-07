@@ -346,3 +346,18 @@ Base: PR #18 head `1039b8d2fc70b8b2bdbd1b860021c4ca69a9f52c`, including merged P
 - Render tests use native Twig filters and check escaping, CSRF, unchecked consent, Bootstrap responsive columns/wrapping, absence of custom CSS/authorization steps, and actions for all persisted payment states. Pricing tests cover quantities, native renewal overrides/discounts, invoice tax and monthly, quarterly, annual and biennial periods.
 
 Responsive validation here is rendered-markup validation; no new browser viewport or real Mollie checkout/public-webhook run was performed for this page revision. Automatic recurring collection remains disabled.
+
+## Payment modes and custom cart consent (2026-11-07)
+
+Base: latest PR #18 head `7a2998041b9ab0cb368ab213572d2a1a91b5cbad`, on the existing feature branch. Inspected installed/pinned Core `7bc90195a535a03d33b4d0db91f41ba6989dee8a`, its gateway config template/service, native cart API/service and tests, invoice hash repository, and invoice authorization/payment dispatch. Compared with stable 0.8.9: native select config and cart result shape exist there, but its legacy model/payment architecture remains unsupported by this adapter. No Core or vendor change is included.
+
+Executed locally with PHP 8.3.30 and faked Mollie SDK requests:
+
+- Module unit suite: **490 tests, 3327 assertions**, passing.
+- Disposable MariaDB integration suite: **37 tests, 392 assertions**, passing.
+- PHP CS Fixer: **54 files**, no changes required.
+- All three modes cover direct/native/UI/API initiation, default configuration, invalid configuration, mode changes, unsupported invoices/guests, and preserved settlement/reverification after policy changes.
+- Cart coverage includes explicit consent, current version/digest, native session CSRF, ownership, saved gateway identity, source evidence, company changes during authorization, mixed/multiple/one-time orders, repeat calls, immutable lost-response retries, historical source-less attempts and authenticated provider metadata tampering.
+- Independent MariaDB workers race cart requests while preserving one reservation and original consent source. Existing atomic settlement, first-payment Customer identity, mandate verification and accounting regressions still pass.
+
+No real Mollie API calls, new public-webhook evidence or browser cart checkout were performed for this feature. The actual custom theme still needs manual checks for login/CSRF, consent rendering and submission capture, correct native callback replacement, all three modes, selected-gateway changes, mixed/free/credit-covered carts, double clicks, lost responses and verified Test checkout/mandate recovery. See [CUSTOM_CART_CHECKOUT.md](CUSTOM_CART_CHECKOUT.md). Automatic recurring collection remains disabled.

@@ -128,3 +128,10 @@ This update needs no new columns or tables. New Customer requests send validated
 Use `php module/Molliepayments/bin/diagnose-transactions.php /absolute/path/to/FOSSBilling/src` for read-only orphan inventory. Do not backfill processed transaction associations or replay paid accounting. Unprocessed errors may use the native permission-checked processing action and original provider context. See [the verified association contract](PAYMENTS.md#verified-transaction-invoice-association).
 
 Module date fields now use native Doctrine DATETIME columns, stored in UTC as `Y-m-d H:i:s`. The status CLI also presents dates in the host `i18n.timezone`, initialized by FOSSBilling bootstrap, using the same readable format. No separate module timezone configuration exists. This development-only schema replacement has no migration: recreate the disposable module database before use; do not apply it to old integer-timestamp tables containing records. Database recreation is an operator action, not performed by the adapter.
+
+
+## Checkout policy and custom cart themes
+
+The native MolliePayments gateway form now includes **Payment mode**: `both` (default), `one_time_only`, or `recurring_only`. Keep **Allow One Time Payments** enabled, including for recurring authorization: this pays an invoice with a first payment and does not enable native subscriptions. Disabled gateways and disallowed modes fail closed at checkout. The existing native encrypted credential store is unchanged. No schema upgrade is needed for this feature: consent source is retained in each new attempt's existing immutable request metadata; historical attempts are not backfilled.
+
+Themes without custom integration retain the normal flow. See [CUSTOM_CART_CHECKOUT.md](CUSTOM_CART_CHECKOUT.md) for the authenticated post-cart consent API, error/recovery rules, supported-host limitations and manual checks.
