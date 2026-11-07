@@ -16,7 +16,7 @@ final class RecurringEligibility
 {
     public static function scope(EntityManagerInterface $em, Invoice $invoice): ?array
     {
-        $items = $em->getRepository(InvoiceItem::class)->findBy(['invoice' => $invoice]);
+        $items = $em->getRepository(InvoiceItem::class)->findByInvoiceId((int) $invoice->getId());
         $scope = null;
         foreach ($items as $item) {
             $em->refresh($item);

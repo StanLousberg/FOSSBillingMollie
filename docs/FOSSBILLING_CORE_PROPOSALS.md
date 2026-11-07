@@ -22,7 +22,7 @@ Until core supports this, MolliePayments uses existing `processed` with amount `
 
 ## Provider Customer mappings
 
-Issue #7 adds only Mollie-specific Customer identifiers, creation identity and recovery state. These are provider integration responsibilities and do not require core accounting or client lifecycle changes. No generic customer synchronization, consent system or recurring scheduler is implemented. Issue #8 must consume the internal Customer service explicitly; mandate authorization and first-payment orchestration remain separate work.
+Issue #7 adds only Mollie-specific Customer identifiers, creation identity and recovery state. These are provider integration responsibilities and do not require core accounting or client lifecycle changes. No generic customer synchronization, consent system or recurring scheduler is implemented. PR #18 consumes the internal Customer service explicitly for consent-based first-payment onboarding and authenticated provider mandate verification. Automatic recurring collection remains disabled.
 
 
 Issue #8 review: recurring-order recognition and order-scoped mandate authorization are provider integration concerns and use existing native invoice/order entities. No invoice calculation, renewal scheduler or generic subscription mechanism is added. Fixed-total native subscription eligibility is deliberately kept separate. The observed authenticated CSRF/session mismatch also affects a native API and remains a host investigation; this adapter preserves security rather than implementing a replacement session/nonce mechanism. See `docs/VALIDATION.md`.
@@ -35,3 +35,11 @@ Issue #8 review: recurring-order recognition and order-scoped mandate authorizat
 A reusable host contract for provider-verified association of a claimed transaction, with compare-and-set semantics and explicit processed-history protections, would benefit other gateways. Processed associations are currently frozen by native updates. Historical corrections therefore require a separately designed, permission-checked, audited **association-only** upstream workflow with independent provider verification; it must preserve transaction amounts, balances, invoice paid state and settlement audit records. This extension deliberately provides only read-only orphan diagnostics and no SQL backfill or alternative financial engine.
 
 The current form-IPN entry point also requires an invoice ID before adapter dispatch. Consequently an unbound public Mollie callback cannot be rescued inside the adapter at all. Generated MolliePayments URLs remain invoice-bound; an upstream provider-authenticated dispatch/association contract would be needed to support unbound public callbacks without trusting nested GET data or weakening creation validation.
+
+## Native template discovery in source workspaces
+
+`TwigLoader::getModuleTemplatePaths()` uses Symfony Finder without following module symlinks. A supported native module-template registration hook or symlink-aware discovery would remove the narrow `AdminTwigFactory` fallback. It must preserve theme precedence and the configured native filters, locale, timezone and CSRF setup. No Core or theme modification is included here.
+
+## Native reuse review
+
+The [2026-11-07 audit](FOSSBILLING_NATIVE_REUSE_AUDIT.md) rechecked these proposals against pinned Core, installed/current main and stable 0.8.9. Existing `PayGatewayCustomer` is a gateway/client cache with cascading removal; it lacks environment/profile separation, encrypted creation snapshots and fenced unresolved-request recovery. MolliePayments retains its durable provider mapping instead of duplicating data into that cache. No generic customer subsystem is proposed or implemented.

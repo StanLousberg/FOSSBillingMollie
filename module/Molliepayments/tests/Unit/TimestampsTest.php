@@ -87,3 +87,40 @@ test('45 minute customer and payment retry windows are absolute in every host ti
         date_default_timezone_set($previous);
     }
 })->with(['UTC', 'Europe/Amsterdam']);
+
+test('native transaction lifecycle timestamps callback changes without touching processed history', function (string $zone, string $status): void {
+    $previous = date_default_timezone_get();
+    try {
+        date_default_timezone_set($zone);
+        $ctx = molliePaymentContext();
+        $ctx->payments->checkout($ctx->invoice->getId(), $ctx->gateway->getId());
+        $ctx->status = $status === 'duplicate' ? 'paid' : $status;
+        if ($status === 'duplicate') {
+            mollieWebhook($ctx);
+        }
+        $tx = new Box\Mod\Invoice\Entity\Transaction();
+        $tx->setGateway($ctx->gateway)->setInvoice($ctx->invoice)
+            ->setStatus(Box\Mod\Invoice\Entity\Transaction::STATUS_PROCESSING)
+            ->setCreatedAt(new DateTime('2000-01-01 00:00:00'))
+            ->setUpdatedAt(new DateTime('2000-01-01 00:00:00'));
+        $ctx->em->persist($tx);
+        $ctx->em->flush();
+        $created = $tx->getCreatedAt()->format('Y-m-d H:i:s');
+        $data = ['get' => ['invoice_id' => $ctx->invoice->getId(), 'attempt_id' => mollieAttempt($ctx)['id']],
+            'post' => ['id' => 'tr_disposable123']];
+        $ctx->payments->processTransaction($tx->getId(), $data, $ctx->gateway->getId());
+        $ctx->em->refresh($tx);
+        expect($tx->getCreatedAt()->format('Y-m-d H:i:s'))->toBe($created)
+            ->and($tx->getUpdatedAt()->getTimestamp())->toBeGreaterThanOrEqual(time() - 10)
+            ->and($tx->getUpdatedAt()->getTimezone()->getName())->toBe($zone)
+            ->and($tx->getTxnStatus())->toBe($status);
+        if ($status !== 'pending') {
+            $table = $ctx->db->quoteSingleIdentifier('transaction');
+            $before = $ctx->db->fetchAssociative("SELECT * FROM {$table} WHERE id = ?", [$tx->getId()]);
+            $ctx->payments->processTransaction($tx->getId(), $data, $ctx->gateway->getId());
+            expect($ctx->db->fetchAssociative("SELECT * FROM {$table} WHERE id = ?", [$tx->getId()]))->toBe($before);
+        }
+    } finally {
+        date_default_timezone_set($previous);
+    }
+})->with(['UTC', 'Europe/Amsterdam'])->with(['pending', 'failed', 'paid', 'duplicate']);

@@ -177,3 +177,19 @@ test('ambiguous and custom invoice contents route only to oneoff checkout', func
         ->and($ctx->payload['sequenceType'])->toBe('oneoff')->and($ctx->customerRequests)->toBeEmpty()
         ->and(mollieAttempt($ctx)['consent_version'])->toBeNull();
 })->with(['custom', 'mixed', 'multiple']);
+
+test('native invoice item lookup keeps onboarding scoped to its own invoice', function (): void {
+    $ctx = mollieOnboarding(molliePaymentContext());
+    $other = clone $ctx->invoice;
+    $other->setHash(bin2hex(random_bytes(20)));
+    $ctx->em->persist($other);
+    $ctx->em->flush();
+    $foreign = clone $ctx->item;
+    $foreign->setInvoice($other)->setType(InvoiceItem::TYPE_DEPOSIT);
+    $ctx->em->persist($foreign);
+    $ctx->em->flush();
+    expect($ctx->payments->onboarding($ctx->invoice->getId())['order_id'])->toBe((string) $ctx->order->getId());
+    mollieFirst($ctx);
+    expect($ctx->payload['amount']['value'])->toBe('12.34')
+        ->and($ctx->payload['metadata']['invoice_id'])->toBe((string) $ctx->invoice->getId());
+});

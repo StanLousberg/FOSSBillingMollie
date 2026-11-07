@@ -110,3 +110,15 @@ test('unreadable encrypted customer snapshot fails closed without replacement PO
         ->and(count($ctx->customerRequests))->toBe($before + 1)
         ->and(mollieCustomerRow($ctx)['idempotency_key'])->toBe($row['idempotency_key']);
 });
+
+test('optional customer email follows native validation without changing the client identity', function (string $email): void {
+    $ctx = mollieCustomers(molliePaymentContext());
+    // Legacy hydration is allowed to contain details current native setters reject.
+    (new ReflectionProperty(Box\Mod\Client\Entity\Client::class, 'email'))->setValue($ctx->client, $email);
+    $snapshot = CustomerRequest::snapshot($ctx->client, str_repeat('a', 32), $ctx->di['crypt']);
+    $payload = CustomerRequest::payload($snapshot, str_repeat('a', 32), $ctx->di['crypt']);
+    $normalized = trim($email);
+    $expected = strlen($normalized) <= 254 && FOSSBilling\Core\Validation\EmailValidator::isEmailValid($normalized) ? $normalized : null;
+    expect($payload['email'] ?? null)->toBe($expected)
+        ->and($ctx->client->getEmail())->toBe($email);
+})->with([' foo&bar@example.invalid ', 'a+b@example.invalid', '"quoted"@example.invalid', "bad\n@example.invalid", 'missing-at', str_repeat('a', 64) . '@example.invalid', str_repeat('a', 65) . '@example.invalid']);

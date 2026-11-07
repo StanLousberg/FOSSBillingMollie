@@ -33,16 +33,13 @@ test('orphan association rejects unverified context without linking or settling'
     mollieFirst($ctx);
     $ctx->status = 'paid';
     $tx = mollieOrphan($ctx);
-    $data = $tx->getIpn();
+    $data = mollieNativeIpn($ctx, $tx);
     if ($case === 'get_invoice') {
         $data['get']['invoice_id'] = 999;
-        $tx->setIpn($data);
     } elseif ($case === 'get_array') {
         $data['get']['invoice_id'] = ['1'];
-        $tx->setIpn($data);
     } elseif ($case === 'payment') {
         $data['post']['id'] = 'tr_foreign';
-        $tx->setIpn($data);
     } elseif ($case === 'conflict') {
         $invoice = clone $ctx->invoice;
         $invoice->setHash(bin2hex(random_bytes(20)));
@@ -70,6 +67,7 @@ test('orphan association rejects unverified context without linking or settling'
             return $payment;
         };
     }
+    $tx->setIpn((new ReflectionProperty(Transaction::class, 'ipn'))->getType()?->getName() === 'array' ? $data : json_encode($data, JSON_THROW_ON_ERROR));
     $ctx->em->flush();
     $before = $tx->getInvoice()?->getId();
     expect(fn () => $ctx->transactionService->preProcessTransaction($tx))->toThrow($case === 'gateway' ? FOSSBilling\Core\Exception\BaseException::class : Payment_Exception::class);
@@ -90,7 +88,7 @@ test('processed orphan financial history stays immutable and diagnostic stays re
     $rows = TransactionDiagnostics::orphans($ctx->db);
     expect($rows[0])->toMatchArray(['transaction_id' => $tx->getId(), 'provider_verified' => false,
         'local_candidate_invoice_id' => $ctx->invoice->getId(), 'action' => 'preserve_processed_history_operator_review']);
-    expect(fn () => $ctx->payments->processTransaction($tx->getId(), $tx->getIpn(), $ctx->gateway->getId()))->toThrow(Payment_Exception::class, 'history cannot be relinked');
+    expect(fn () => $ctx->payments->processTransaction($tx->getId(), mollieNativeIpn($ctx, $tx), $ctx->gateway->getId()))->toThrow(Payment_Exception::class, 'history cannot be relinked');
     expect($ctx->db->fetchAllAssociative("SELECT * FROM {$table}"))->toBe($before)
         ->and((int) $ctx->db->fetchOne('SELECT COUNT(*) FROM client_balance'))->toBe(0)
         ->and(count($ctx->requests))->toBe(1);
@@ -104,7 +102,7 @@ test('orphan cannot link without the native processing claim or when provider is
         $ctx->transactionService->claimForProcessing($tx->getId());
         $ctx->responses[Mollie\Api\Http\Requests\GetPaymentRequest::class] = Mollie\Api\Fake\MockResponse::error(503, 'Unavailable', 'Sensitive provider details');
     }
-    expect(fn () => $ctx->payments->processTransaction($tx->getId(), $tx->getIpn(), $ctx->gateway->getId()))->toThrow(Payment_Exception::class);
+    expect(fn () => $ctx->payments->processTransaction($tx->getId(), mollieNativeIpn($ctx, $tx), $ctx->gateway->getId()))->toThrow(Payment_Exception::class);
     $ctx->em->refresh($tx);
     expect($tx->getInvoice())->toBeNull()->and((int) $ctx->db->fetchOne('SELECT COUNT(*) FROM client_balance'))->toBe(0);
 })->with([true, false]);

@@ -18,3 +18,11 @@ function mollieOrphan(object $ctx, bool $invoiceHint = true): Transaction
 
     return $ctx->em->find(Transaction::class, $id);
 }
+
+/** Core renamed its payload accessor when native IPN storage changed to JSON arrays. */
+function mollieNativeIpn(object $ctx, Transaction $tx): array
+{
+    return method_exists($ctx->transactionService, 'getIpnPayload')
+        ? $ctx->transactionService->getIpnPayload($tx)
+        : $ctx->transactionService->getDecodedIpn($tx);
+}

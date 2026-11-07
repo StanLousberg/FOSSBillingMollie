@@ -10,6 +10,8 @@ There is no supported production release. Use a disposable development host and 
 
 Published 0.8.9 is unsupported; a greater version number does not guarantee compatibility. The manifest identifies preview version `0.0.1`. Encrypted gateway secrets, masking/blank updates, invoice authorization/locking, transaction claims, deferred events and module-scoped schema synchronization are required. The small runtime contract guard rejects incompatible builds; never patch core or add a plaintext fallback.
 
+The [native reuse audit](FOSSBILLING_NATIVE_REUSE_AUDIT.md) records the installed/main revision `7bc90195a535a03d33b4d0db91f41ba6989dee8a`, the pinned host and stable 0.8.9 (`e594f8a5f91ea4cc905708f8dc1e42ccb752ed21`). Stable lacks the Doctrine invoice/transaction entities and invoice locking required here; it is an explicit incompatibility, not a passing payment target. This refactor adds no schema conversion or historical timestamp rewrite.
+
 The official `mollie/mollie-api-php:^4.0` dependency is isolated in this module. Keep `composer.lock` committed and use `composer install`, not `composer update`, for reproducible installations. Never change the host's root Composer dependencies for MolliePayments.
 
 ## Workspace
