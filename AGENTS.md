@@ -9,8 +9,25 @@ This document describes the repository's goals, constraints, architecture and wo
 - **Target platform:** FOSSBilling (PHP 8.3+, Doctrine ORM/DBAL, Pest).
 - **Provider:** Mollie, accessed through the official `mollie/mollie-api-php` SDK, presently constrained to `^4.0`.
 - **Project type:** independent gateway adapter plus a companion FOSSBilling extension module.
-- **Status:** one-time checkout and native invoice settlement implemented for development validation; **not production-ready**. Manual Mollie Test checkout/public-webhook evidence is required before production use. Recurring payments remain disabled.
+- **Status:** one-time checkout, native invoice settlement, first-payment onboarding and provider mandate verification implemented for development validation; **not production-ready**. Manual Mollie Test checkout/public-webhook evidence is required before production use. Automatic recurring collection remains disabled.
 - **Language:** English for documentation, code comments, commit messages and UI copy unless a task explicitly requests translations.
+
+## FOSSBilling workspace and native code reuse
+
+1. MolliePayments is developed and tested inside a complete FOSSBilling source workspace.
+2. Always inspect relevant FOSSBilling Core source and tests before designing or implementing overlapping functionality.
+3. The complete upstream source is available as a reference, not just its public documentation.
+4. Reuse supported native FOSSBilling services, entities, Doctrine mechanisms, lifecycle callbacks, formatting and validation facilities whenever suitable.
+5. Do not duplicate native business logic solely to keep the adapter self-contained.
+6. Prefer dependency injection and existing module-service access over copying code or introducing new wrappers.
+7. Keep Mollie-specific API integration, payment identifiers, mandates, provider verification, idempotency and provider recovery inside MolliePayments.
+8. FOSSBilling remains responsible for invoices, orders, customer accounts, accounting, transaction processing and native billing state.
+9. Do not modify upstream Core or its vendor files as a deliverable of an adapter task. Propose generic upstream changes separately.
+10. Before writing a helper or persistence abstraction, inspect whether equivalent functionality already exists in Core.
+11. When a duplicate-looking implementation must remain for financial correctness, concurrency, compatibility or security, explain the reason and add regression tests.
+12. Verify functionality against the actual installed FOSSBilling version and the latest supported upstream release.
+13. Prefer existing Bootstrap and native Twig conventions for UI integration rather than introducing duplicate frontend systems.
+14. Treat FOSSBilling Core as the source of truth for native behavior and Mollie as the source of truth for provider behavior.
 
 ## Non-negotiable architecture boundaries
 
@@ -23,7 +40,7 @@ This document describes the repository's goals, constraints, architecture and wo
 
 ## MolliePayments is an adapter, not a billing system
 
-Allowed responsibilities: credential configuration and connection tests, SDK payment creation, Hosted Checkout redirects, provider identifiers mapped to invoices, payment-attempt state, webhook verification, provider-specific idempotency/retry protection and minimal reconciliation. Customer/mandate and recurring integration belong to a future phase, not speculative code now.
+Allowed responsibilities: credential configuration and connection tests, SDK payment creation, Hosted Checkout redirects, provider identifiers mapped to invoices, payment-attempt state, webhook verification, provider-specific idempotency/retry protection and minimal reconciliation. Explicit first-payment onboarding, encrypted Customer creation snapshots and provider mandate verification are implemented. Automatic recurring collection remains disabled; do not add a scheduler or speculative recurring functionality.
 
 FOSSBilling owns customer wallets and balances, credit reservation/release, invoice accounting, pricing and tax, general partial-payment allocation, the transaction ledger, service activation and renewal scheduling, financial reports and transaction statuses. Never implement an alternative to these inside this module.
 
@@ -88,8 +105,12 @@ gateway/MolliePayments.php
 module/Molliepayments/manifest.json
 module/Molliepayments/Service.php
 module/Molliepayments/PaymentService.php
+module/Molliepayments/CustomerService.php
+module/Molliepayments/MandateService.php
 module/Molliepayments/Entity/MolliePaymentAttempt.php
+module/Molliepayments/Entity/MollieCustomer.php
 module/Molliepayments/Repository/AttemptRepository.php
+module/Molliepayments/Repository/CustomerRepository.php
 module/Molliepayments/Support/Amount.php
 module/Molliepayments/bin/
 module/Molliepayments/Support/MollieClientFactory.php

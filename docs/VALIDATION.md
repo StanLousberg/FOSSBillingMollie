@@ -279,3 +279,42 @@ The public webhook settled the native recurring invoice with one receipt and one
 The existing ordinary `oneoff` Test payment was then also completed through the official simulator. Its public webhook paid the other native invoice with one linked transaction and one receipt; consent/onboarding remained absent. Final authenticated provider/database reads found one Customer mapping total, one attempt per invoice, both provider payments and native invoices paid, and first onboarding still `ready`.
 
 The seeded order invoices exercise the real native invoice/banklink path, not cart placement. Browser/session intermittence remains a separate host/environment limitation; this review does not claim its underlying cause repaired. No new real Live operation, refund, chargeback, missing/invalid mandate scenario or automatic collection was performed; unsupported-mandate/failure paths remain mocked automated evidence. The disposable client, invoices, provider Customer, mandate and payment attempts were retained. Only `molliepayments_test` was reset by destructive integration fixtures. Sanitized logs and temporary harnesses use `/tmp/mp-links-*` outside the repository.
+
+## FOSSBilling native reuse review — 2026-11-07
+
+Adapter baseline: freshly fetched PR #18 branch `8-implement-first-payments-and-mandate-onboarding` at `d5c326a0c58e37230d84344fac38669997ed372b`. Work branch: `refactor/fossbilling-core-reuse-pr18`, targeting that feature branch. Exact source comparisons and per-area decisions are in [FOSSBILLING_NATIVE_REUSE_AUDIT.md](FOSSBILLING_NATIVE_REUSE_AUDIT.md).
+
+Official Core sources were freshly cloned into a temporary bare repository. Installed host and fetched upstream main both resolve to `7bc90195a535a03d33b4d0db91f41ba6989dee8a`; existing CI pin is `97bb583dd681e311e2d10fe8c648095f2a479878`; latest stable tag `0.8.9` resolves to `e594f8a5f91ea4cc905708f8dc1e42ccb752ed21`. The fetched tags contain no newer stable release. Pinned and stable archives were unpacked into DDEV `/tmp/mp-native-pinned` and `/tmp/mp-native-stable`, with their own lockfile installations and sample configurations. Upstream main's source is the installed host's source; its existing dependencies and native Pest bootstrap were used directly.
+
+Changes reuse native email validation, invoice-item repository retrieval and Transaction timestamp callbacks. They add no schema migration or payment/consent state transition. Both module epoch schemas, immutable requests, mapping identity, native claims, lock order and atomic settlement bridge are retained. `AGENTS.md` permanently requires native source inspection/reuse and now describes implemented first-payment onboarding and mandate verification accurately.
+
+Executed with PHP 8.3.30 / MariaDB 11.8 through the existing DDEV project:
+
+| Check | Installed / upstream main | Exact CI pinned host |
+| --- | --- | --- |
+| Baseline module unit/SQLite suite before runtime refactor | 343 tests / 2577 assertions passed | Not rerun before refactoring |
+| Full module unit/SQLite suite after refactor | 359 tests / 2664 assertions passed | 359 tests / 2660 assertions passed |
+| Full MariaDB integration suite | 22 tests / 259 assertions passed | 22 tests / 259 assertions passed |
+| Final transaction-association fixture regression | 28 tests / 277 assertions passed | Covered in final full suite |
+| Native Invoice service / Transaction service / InvoiceItem repository tests | 270 tests / 1927 assertions passed | Source inspected; separate host suite not run |
+| Composer validation (`--strict --no-check-publish`) | Passed | Own Core lockfile installation passed |
+| Module/gateway PHP syntax and project PHP-CS-Fixer | Passed, all 50 PHP files | Same module sources; no separate style run needed |
+
+Stable 0.8.9 was bootstrapped with its own dependencies and a disposable sample configuration, then `Compatibility::assertHost()` was invoked without database operations. It rejected the unsupported native contracts with the expected `Payment_Exception`. Payment tests on stable would be invalid because it lacks the required Doctrine invoice/transaction entities and locking APIs; stable remains explicitly unsupported, not a passing payment target.
+
+Module suites cover SQLite and independent-worker MariaDB concurrency, redelivery, transaction association/orphan recovery, atomic accounting/rollback, Customer creation/encrypted immutable replay, mandate consent/verification, UTC/Europe-Amsterdam winter/summer and both DST transitions, differing MariaDB session offsets, elapsed retry/lease deadlines, and additive upgrades preserving historical rows/unknown columns. New tests age native transaction timestamps before pending/failed/paid/duplicate processing, check callback updates through real ORM lifecycle/reload and ensure processed replays do not mutate history. Email edge cases retain native identity and provider payload behavior; foreign invoice items cannot enter the authorization scope or amount.
+
+The first pinned run exposed existing fixture assumptions: raw IPN is serialized JSON on pinned, an array on main. Tests now use each host's native service accessor (`getDecodedIpn()` / `getIpnPayload()`), and fixture writes match the actual entity property type. An intermediate rerun used main's renamed accessor on pinned; selecting the native accessor by availability resolved it without changing runtime processing. The copied sample configuration also generated a different salt on each include, making real native decryption fail. CI now evaluates the sample once and persists its resulting array only in the disposable checkout. Final pinned and installed suites pass; no assertions were removed or skipped to hide these failures. The pinned/main × SQLite/MariaDB CI matrix remains intact.
+
+Commands used from the host root include:
+
+```bash
+ddev exec ./src/vendor/bin/pest --test-directory=../tests --configuration=phpunit.xml.dist src/modules/Molliepayments/tests/Unit
+ddev exec env MOLLIEPAYMENTS_MYSQL_URL=mysql://db:db@db:3306/molliepayments_test ./src/vendor/bin/pest --test-directory=../tests --configuration=phpunit.xml.dist src/modules/Molliepayments/tests/Integration
+ddev exec composer validate --strict --no-check-publish --working-dir=.local/MolliePayments
+ddev exec ./src/vendor/bin/php-cs-fixer fix --config=.local/MolliePayments/.php-cs-fixer.php --dry-run --diff --sequential
+```
+
+Pinned runs used the same Pest arguments after changing directory to `/tmp/mp-native-pinned`. Host-side logs use `/tmp/mp-native-*.log`; temporary checkout Composer logs are inside DDEV `/tmp/`. MariaDB fixtures enforce the exact disposable database name `molliepayments_test`; the normal development database was never reset or used for these fixtures. All automated provider requests use SDK fakes/dummy keys. No Core/vendor changes, credentials or financial personal data are included in this deliverable. Existing host cache/link status was preserved.
+
+Remaining limits: stable is incompatible by design; PostgreSQL and the full unrelated Core suite were not run. No new interactive browser, real Mollie Test/public-webhook or production validation was performed in this refactor. Earlier manual evidence and its gaps remain as documented above. No production-readiness or automatic-recurring-collection claim is made.

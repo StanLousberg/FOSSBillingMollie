@@ -30,6 +30,7 @@ From this repository, `composer install` installs the locked SDK into `module/Mo
 | `module/Molliepayments/` | Checkout, provider verification, attempts, connection settings and CLI recovery |
 | `module/Molliepayments/tests/` | Provider fakes with native SQLite accounting and separate MariaDB concurrency tests |
 | [AGENTS.md](AGENTS.md) | Permanent architecture and coding rules |
+| [Native reuse audit](docs/FOSSBILLING_NATIVE_REUSE_AUDIT.md) | Reviewed Core contracts, exact source revisions and retained integration safeguards |
 | [Core proposals](docs/FOSSBILLING_CORE_PROPOSALS.md) | Generic host capabilities proposed upstream; not implemented here |
 | [CONTRIBUTING.md](CONTRIBUTING.md) | Contribution workflow |
 | [SECURITY.md](SECURITY.md) | Private vulnerability reporting |

@@ -5,6 +5,7 @@ declare(strict_types=1);
 namespace Box\Mod\Molliepayments\Support;
 
 use Box\Mod\Client\Entity\Client;
+use FOSSBilling\Core\Validation\EmailValidator;
 
 /** Encrypt only the immutable personal fields; opaque association metadata stays readable. */
 final class CustomerRequest
@@ -25,7 +26,7 @@ final class CustomerRequest
                     $email = substr($email, 0, $at + 1) . $domain;
                 }
             }
-            if (strlen($email) <= 254 && filter_var($email, FILTER_VALIDATE_EMAIL) !== false) {
+            if (strlen($email) <= 254 && EmailValidator::isEmailValid($email)) {
                 $details['email'] = $email;
             }
             $request = ['metadata' => ['molliepayments_customer' => $mappingId]];

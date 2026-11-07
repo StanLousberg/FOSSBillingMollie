@@ -453,7 +453,6 @@ final class PaymentService
                     $tx->setNote($terminal ? 'Mollie callback handled: ' . $current['status'] . '; no money received or invoice settled.' : null);
                     $tx->setError(null);
                     $tx->setErrorCode(null);
-                    $tx->setUpdatedAt(new \DateTime());
                     $this->di['em']->flush();
                 }
             });
@@ -509,7 +508,6 @@ final class PaymentService
                     $tx->setStatus(Transaction::STATUS_PROCESSED);
                     $tx->setTxnStatus('duplicate');
                     $tx->setAmount('0.00');
-                    $tx->setUpdatedAt(new \DateTime());
                     $this->di['em']->flush();
                 }
 
@@ -549,7 +547,6 @@ final class PaymentService
             $tx->setStatus(Transaction::STATUS_PROCESSED);
             $tx->setError(null);
             $tx->setErrorCode(null);
-            $tx->setUpdatedAt(new \DateTime());
             $this->di['em']->flush();
             $this->attempts->update($attempt['id'], ['settled_transaction_id' => $tx->getId(), 'error' => null]);
 
@@ -728,7 +725,7 @@ final class PaymentService
         if ($invoice->getCredit() !== null && Amount::minor($invoice->getCredit()) !== 0) {
             throw new \Payment_Exception('Legacy invoice credit requires reconciliation before Mollie checkout.');
         }
-        $items = $this->di['em']->getRepository(InvoiceItem::class)->findBy(['invoice' => $invoice]);
+        $items = $this->invoiceService()->getInvoiceItemRepository()->findByInvoiceId((int) $invoice->getId());
         foreach ($items as $item) {
             if ($item->getType() === InvoiceItem::TYPE_DEPOSIT) {
                 throw new \Payment_Exception('Add Funds invoices are not supported by MolliePayments yet.');
