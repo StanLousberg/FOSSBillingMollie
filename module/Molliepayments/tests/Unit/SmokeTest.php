@@ -17,12 +17,11 @@ test('one-time checkout is supported and recurring payments remain disabled', fu
 
 test('extension icon can be inlined without a public module asset request', function (): void {
     $modulePath = dirname(__DIR__, 2);
-    $manifest = json_decode(file_get_contents($modulePath . '/manifest.json'), true, 512, JSON_THROW_ON_ERROR);
     $loader = new FOSSBilling\Core\Twig\TwigLoader(
         FOSSBilling\Core\Twig\AppArea::from('admin'),
         PATH_THEMES . '/admin_default',
     );
-    $source = $loader->getSourceContext('mod_Molliepayments_' . $manifest['icon_url'])->getCode();
+    $source = $loader->getSourceContext('mod_Molliepayments_icon.svg')->getCode();
     $document = new DOMDocument();
     expect($document->loadXML($source, LIBXML_NONET))->toBeTrue();
     $image = $document->getElementsByTagName('image')->item(0);
@@ -31,6 +30,25 @@ test('extension icon can be inlined without a public module asset request', func
     expect($uri)->toStartWith('data:image/png;base64,')
         ->and(base64_decode(substr($uri, strlen('data:image/png;base64,')), true))
         ->toBe(file_get_contents(dirname($modulePath, 2) . '/gateway/assets/mollie-icon.png'));
+});
+
+test('manifest uses only v1 fields and loads on supported hosts', function (): void {
+    $modulePath = dirname(__DIR__, 2);
+    $manifest = json_decode(file_get_contents($modulePath . '/manifest.json'), true, 512, JSON_THROW_ON_ERROR);
+    expect(array_diff(array_keys($manifest), ['manifest_version', 'type', 'id', 'name', 'version', 'description', 'author', 'license', 'homepage_url', 'requires']))->toBe([]);
+    $module = new FOSSBilling\Core\Module('molliepayments');
+    $module->setDi(Tests\Helpers\container());
+    $loaded = $module->getManifest();
+    expect($loaded)->toMatchArray([
+        'id' => 'molliepayments',
+        'name' => 'MolliePayments',
+        'version' => $manifest['version'],
+        'author' => $manifest['author']['name'],
+        'project_url' => $manifest['homepage_url'],
+    ]);
+    // The pinned preview predates automatic package icon discovery. Inline
+    // SVG loading and the gateway logo are verified independently above/below.
+    expect($loaded['icon_url'])->toBeIn([null, '/modules/Molliepayments/icon.svg']);
 });
 
 test('gateway directory link exposes the original Mollie logo', function (): void {

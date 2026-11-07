@@ -6,9 +6,11 @@ There is no supported production release. Use a disposable development host and 
 
 - PHP 8.3+ with FOSSBilling's required extensions, including cURL, JSON, mbstring and OpenSSL for this adapter.
 - Composer 2, Git, Docker and DDEV for the recommended local setup.
-- FOSSBilling development baseline `97bb583dd681e311e2d10fe8c648095f2a479878` (preview version `0.0.1`). CI also tests current upstream `main`.
+- FOSSBilling development baseline `7bc90195a535a03d33b4d0db91f41ba6989dee8a` (preview version `0.0.1`). CI also tests current upstream `main`.
 
-Published 0.8.9 is unsupported; a greater version number does not guarantee compatibility. The manifest identifies preview version `0.0.1`. Encrypted gateway secrets, masking/blank updates, invoice authorization/locking, transaction claims, deferred events and module-scoped schema synchronization are required. The small runtime contract guard rejects incompatible builds; never patch core or add a plaintext fallback.
+Published 0.8.9 is unsupported; a greater version number does not guarantee compatibility. The manifest identifies preview version `0.0.1`. Encrypted gateway secrets, masking/blank updates, invoice authorization/locking, transaction claims, deferred events and module-scoped schema synchronization are required. The previous baseline `97bb583dd681e311e2d10fe8c648095f2a479878` exposed the renewal line resolver only privately; the baseline now uses the audited installed Core revision so no private API access or copied renewal logic is needed. The authorization page also requires native `Invoice\Service::resolveRenewalLine()` and `Product\Service::getRenewalPromoAdjustments()` for read-only renewal pricing. The small runtime contract guard rejects incompatible builds; never patch core or add a plaintext fallback.
+
+The [native reuse audit](FOSSBILLING_NATIVE_REUSE_AUDIT.md) records the installed/main revision `7bc90195a535a03d33b4d0db91f41ba6989dee8a`, the pinned host and stable 0.8.9 (`e594f8a5f91ea4cc905708f8dc1e42ccb752ed21`). Stable lacks the Doctrine invoice/transaction entities and invoice locking required here; it is an explicit incompatibility, not a passing payment target. The original reuse review added no schema conversion. The later development-only DATETIME change below requires fresh module tables.
 
 The official `mollie/mollie-api-php:^4.0` dependency is isolated in this module. Keep `composer.lock` committed and use `composer install`, not `composer update`, for reproducible installations. Never change the host's root Composer dependencies for MolliePayments.
 
@@ -27,7 +29,7 @@ For a new workspace:
 mkdir -p ~/dev/MolliePayments-workspace
 cd ~/dev/MolliePayments-workspace
 git clone https://github.com/FOSSBilling/FOSSBilling.git
-git -C FOSSBilling checkout 97bb583dd681e311e2d10fe8c648095f2a479878
+git -C FOSSBilling checkout 7bc90195a535a03d33b4d0db91f41ba6989dee8a
 git clone https://github.com/StanLousberg/FOSSBillingMollie.git \
   FOSSBilling/.local/MolliePayments
 cd FOSSBilling/.local/MolliePayments
@@ -81,7 +83,7 @@ The single action resolves our saved gateway server-side, refuses missing/duplic
 
 The test calls SDK `payments->page(null, 1)` ([List Payments](https://docs.mollie.com/reference/list-payments)), without `testmode`. Payment data is discarded and errors are sanitized. Success proves read access at that moment; it does not validate checkout or settlement.
 
-The connection interface uses the native extension settings route, permissions, CSRF and Twig filters. Current FOSSBilling's template finder does not follow module-directory symlinks. `AdminTwigFactory` therefore adds our settings directory only when the native loader cannot resolve the template. Native templates and theme overrides retain priority; no core page, theme or permission-discovery replacement is installed.
+The connection interface uses the native extension settings route, permissions, CSRF and Twig filters. Current FOSSBilling's template finder does not follow module-directory symlinks. `AdminTwigFactory` therefore adds our admin/client template directories only when the native loader cannot resolve the template. Native templates and theme overrides retain priority; no core page, theme or permission-discovery replacement is installed.
 
 ## Public callbacks and tests
 
@@ -104,3 +106,39 @@ Run the complete commands in [VALIDATION.md](VALIDATION.md#automated-execution).
 Production packaging, deployment certification, recurring billing and refunds remain outside the current release.
 
 Customer integration adds the module-owned `molliepayments_customer` table. Run the existing module update/migration command before calling the internal Customer service. Synchronization remains additive and preserves payment attempts, legacy columns and Customer mappings. No credentials are migrated or duplicated. See [Customer behavior and recovery](PAYMENTS.md#internal-customer-integration-issue-7).
+
+
+## First-payment onboarding upgrade
+
+Version 0.3.0 adds seven nullable consent/onboarding/mandate columns to the existing module attempt entity. Run the module migration command above before exposing `/molliepayments/onboarding/INVOICE_ID`. It uses `SchemaSynchronizer::syncEntities()` and preserves old one-time attempts, Customer mappings, financial history and secrets. No new core tables, core migrations or destructive schema synchronization are introduced.
+
+Configure exactly one MolliePayments gateway with a saved Test key, Test mode, Enabled and Allow one-time payments. Keep subscriptions disabled. Normal native invoice checkout now routes authenticated owners of a single eligible recurring order to the Bootstrap authorization page before reserving a payment. The invoice must contain only lines for that same recurring order and period; canceled/scheduled-cancellation, mixed, multi-order and custom invoices do not qualify. See [the eligibility policy](PAYMENTS.md#first-payment-onboarding-issue-8). One-time and hash-authorized guest checkout remains `oneoff`; native login is required for consent. Choose **Authorize and start first payment** with the unchecked checkbox selected, or **Pay once without future authorization**. The order association uses existing immutable attempt request metadata; this review adds no columns or tables and does not reinterpret historical broad consent.
+
+Use the configured `SYSTEM_URL` origin consistently for login, invoice navigation and API POSTs. A direct DDEV page whose form actions point to a public tunnel crosses origins and will not carry the same-origin session. The current host also exhibits an independent authenticated session/CSRF mismatch on the configured origin, affecting native APIs; see [validation evidence](VALIDATION.md). Do not disable CSRF, alter sessions or copy cookies across origins to bypass it. This release does not alter native invoice pages, themes or host security.
+
+The v1 manifest omits legacy `icon_url`; newer FOSSBilling builds discover the unchanged root `icon.svg` themselves. The pinned preview baseline predates that discovery and may display the host's default icon in the extension list. Native inline SVG loading and the gateway logo remain available on both hosts. Do not restore the invalid manifest field to change this cosmetic fallback. A 404 when refreshing MolliePayments from the FOSSBilling extension directory is separate: this independent module is not available at that directory endpoint. Use the local installation/update procedure rather than the directory refresh action. A local manifest change cannot publish a directory listing.
+
+Profile payment-method eligibility and mandate association/scope limitations are in [PAYMENTS.md](PAYMENTS.md#first-payment-onboarding-issue-8). After a financially paid checkout, use the same page to recheck a missing/pending mandate; do not create another invoice/payment to retry verification. Real Hosted Checkout and public webhook validation remain separate from mocked CI tests.
+
+
+## Customer detail and transaction-link review
+
+This update needs no new columns or tables. New Customer requests send validated native names/emails and keep their immutable personal-field snapshot encrypted through FOSSBilling's `crypt` service in the existing request column. Preserve the host encryption secret alongside database backups for unresolved creation retries. Existing metadata-only requests and valid Customer IDs remain compatible and are not silently enriched or replaced.
+
+Use `php module/Molliepayments/bin/diagnose-transactions.php /absolute/path/to/FOSSBilling/src` for read-only orphan inventory. Do not backfill processed transaction associations or replay paid accounting. Unprocessed errors may use the native permission-checked processing action and original provider context. See [the verified association contract](PAYMENTS.md#verified-transaction-invoice-association).
+
+Module date fields now use native Doctrine DATETIME columns, stored in UTC as `Y-m-d H:i:s`. The status CLI also presents dates in the host `i18n.timezone`, initialized by FOSSBilling bootstrap, using the same readable format. No separate module timezone configuration exists. This development-only schema replacement has no migration: recreate the disposable module database before use; do not apply it to old integer-timestamp tables containing records. Database recreation is an operator action, not performed by the adapter.
+
+
+## Checkout policy and custom cart themes
+
+The native MolliePayments gateway form now includes **Payment mode**: `both` (default), `one_time_only`, or `recurring_only`. Keep **Allow One Time Payments** enabled, including for recurring authorization: this pays an invoice with a first payment and does not enable native subscriptions. Disabled gateways and disallowed modes fail closed at checkout. The existing native encrypted credential store is unchanged. No schema upgrade is needed for this feature: consent source is retained in each new attempt's existing immutable request metadata; historical attempts are not backfilled.
+
+Themes without custom integration retain the normal flow. See [CUSTOM_CART_CHECKOUT.md](CUSTOM_CART_CHECKOUT.md) for the authenticated post-cart consent API, error/recovery rules, supported-host limitations and manual checks.
+
+
+## Read-only pending mandate verification
+
+The supported Core must provide native `NamedLock::acquire()/release()` and `AfterAdminCronRunEvent` listener discovery. The active module uses that event for at most five settled mandate checks or expirations per run. Within seven days from attempt creation, checks have a five-minute cooldown; at the inclusive seven-day deadline a pending record becomes `manual_review` once its lease is available. Retries read the original processed transaction and authenticated Mollie resources, without creating native transactions, payment events, payments or Customers. No schema migration is introduced.
+
+Readiness requires the Payment's explicit mandate ID/link; a matching payment instrument or Customer-level list is insufficient. Merchants whose provider response never exposes that relation need manual provider investigation. See [the final corrections and recovery procedure](PR18_FINAL_FIXES.md). Browser E2E was excluded from this correction round because of the known upstream CSRF/session issue; no workaround or Core change is included. Automatic collection remains disabled.

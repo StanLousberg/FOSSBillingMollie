@@ -49,6 +49,12 @@ final class Service implements InjectionAwareInterface
         return $this->paymentFactory !== null ? ($this->paymentFactory)($this->di) : new PaymentService($this->di);
     }
 
+    #[\Symfony\Component\EventDispatcher\Attribute\AsEventListener]
+    public function retryPendingMandates(\Box\Mod\Cron\Event\AfterAdminCronRunEvent $event): void
+    {
+        $this->payments()->retryPendingMandates();
+    }
+
     public function customers(): CustomerService
     {
         return new CustomerService($this->di);

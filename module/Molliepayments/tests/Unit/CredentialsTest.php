@@ -3,7 +3,6 @@
 declare(strict_types=1);
 
 use Box\Mod\Molliepayments\Support\Credentials;
-use FOSSBilling\Core\SecretConfig;
 
 require_once PATH_LIBRARY . '/Payment/Adapter/MolliePayments.php';
 
@@ -72,17 +71,29 @@ test('native storage preserves blank secrets and safely replaces either key', fu
     $keys = ['api_key' => 'live_' . bin2hex(random_bytes(20)), 'test_api_key' => 'test_' . bin2hex(random_bytes(20))];
     $gateway = mollieGateway();
     $service->update($gateway, ['config' => $keys]);
-    $stored = json_decode($gateway->getConfig(), true, 512, JSON_THROW_ON_ERROR);
+    $stored = mollieGatewayConfig($gateway);
     foreach ($keys as $name => $key) {
-        expect($stored[$name])->toStartWith(FOSSBilling\Core\Security\Crypt::CURRENT_FORMAT_PREFIX)
-            ->and($stored[$name])->not->toBe($key);
+        $ciphertext = $stored[$name];
+        if (is_array($ciphertext)) {
+            expect(array_keys($ciphertext))->toBe(['_fossbilling_encrypted']);
+            $ciphertext = $ciphertext['_fossbilling_encrypted'];
+        }
+        expect($ciphertext)->toStartWith(FOSSBilling\Core\Security\Crypt::CURRENT_FORMAT_PREFIX)
+            ->and($ciphertext)->not->toBe($key)
+            ->and($di['crypt']->decrypt($ciphertext))->toBe($key);
     }
     $service->update($gateway, ['config' => ['api_key' => '', 'test_api_key' => '  ']]);
-    expect(SecretConfig::decryptMarkedValues(json_decode($gateway->getConfig(), true), $di['crypt']))->toBe($keys);
+    $adapter = $service->getPaymentAdapter($gateway);
+    foreach ($keys as $name => $key) {
+        expect($adapter->getParam($name))->toBe($key);
+    }
     $replacement = ($field === 'api_key' ? 'live_' : 'test_') . bin2hex(random_bytes(20));
     $service->update($gateway, ['config' => [$field => $replacement]]);
     $keys[$field] = $replacement;
-    expect(SecretConfig::decryptMarkedValues(json_decode($gateway->getConfig(), true), $di['crypt']))->toBe($keys);
+    $adapter = $service->getPaymentAdapter($gateway);
+    foreach ($keys as $name => $key) {
+        expect($adapter->getParam($name))->toBe($key);
+    }
 
     $safe = $service->toApiArray($gateway, true, $di['loggedin_admin']);
     expect($safe['config']['api_key'])->toBeNull()->and($safe['config']['test_api_key'])->toBeNull()

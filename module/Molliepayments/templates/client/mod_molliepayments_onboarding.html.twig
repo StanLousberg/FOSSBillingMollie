@@ -1,0 +1,337 @@
+
+{% extends "layout_default.html.twig" %}
+
+{% block meta_title %}Recurring payments{% endblock %}
+
+{% block content %}
+<div class="container py-4">
+    <div class="row">
+        <div class="col-12 col-lg-9 col-xl-8">
+
+            <h1 class="h3 mb-3">Recurring payments</h1>
+
+            <p class="mb-4">
+                {% if onboarding.payment_mode == 'both' %}
+                Choose how you want to pay for your recurring order.
+                With <strong>Pay once</strong>, you pay this invoice
+                and manually pay each future renewal invoice.
+                With <strong>Authorize and pay</strong>, you can
+                authorize automatic payments for future renewals.
+                {% elseif onboarding.payment_mode == 'recurring_only' %}
+                Authorize future renewal payments for this order and pay this invoice.
+                {% else %}
+                Pay this invoice once. Future renewal invoices are paid manually.
+                {% endif %}
+            </p>
+
+            <div class="card mb-4">
+                <div class="card-header">
+                    Payment details
+                </div>
+
+                <div class="card-body">
+                    <dl class="row mb-0">
+                        <dt class="col-sm-4">Order</dt>
+                        <dd class="col-sm-8 text-break">
+                            #{{ onboarding.order_id }}
+                            {{ onboarding.order_title }}
+                        </dd>
+
+                        <dt class="col-sm-4">Invoice</dt>
+                        <dd class="col-sm-8">
+                            <a href="{{ ('invoice/' ~ onboarding.invoice_hash)|url }}">
+                                #{{ onboarding.invoice_id }}
+                            </a>
+                        </dd>
+
+                        <dt class="col-sm-4">First payment</dt>
+                        <dd class="col-sm-8">
+                            <strong>
+                                {{ onboarding.amount }}
+                                {{ onboarding.currency }}
+                            </strong>
+                            <span class="text-secondary">
+                                including tax
+                            </span>
+                        </dd>
+                    </dl>
+                </div>
+            </div>
+
+            {% set messages = {
+                'pending_payment': 'A payment has already started. Please check the existing payment before continuing.',
+                'existing_payment': 'A one-time payment already exists. Return to your invoice to continue.',
+                'paid': 'This invoice has been paid. No further payment is needed.',
+                'pending_mandate': 'Your payment is complete. We are verifying your payment authorization.',
+                'ready': 'Your payment and authorization have been verified.',
+                'payment_failed': 'Your previous payment was unsuccessful. You can try again.',
+                'mandate_invalid': 'Your payment is complete, but authorization could not be verified. Please contact support.',
+                'manual_review': 'This payment requires review. Please contact support before trying again.'
+            } %}
+
+            {% if onboarding.status != 'not_started' %}
+                <div
+                    class="alert {{ onboarding.status in ['manual_review', 'mandate_invalid'] ? 'alert-warning' : 'alert-secondary' }}"
+                    role="status"
+                >
+                    {{ messages[onboarding.status]|default('Please check your invoice or contact support.') }}
+                </div>
+            {% endif %}
+
+            {% if onboarding.can_pay %}
+
+                {% if onboarding.can_authorize %}
+                <div class="mb-4">
+                    <div class="form-check">
+                        <input
+                            class="form-check-input"
+                            id="molliepayments-consent"
+                            type="checkbox"
+                            name="consent"
+                            value="1"
+                            form="molliepayments-onboarding"
+                            required
+                        >
+
+                        <label
+                            class="form-check-label"
+                            for="molliepayments-consent"
+                        >
+                            I authorize {{ onboarding.company_name }}
+                            to automatically collect future renewal
+                            payments for this order using the payment
+                            method I select during Mollie checkout.
+                        </label>
+                    </div>
+                </div>
+
+                {% endif %}
+
+                <div class="row g-3 mb-3">
+
+                    {% if onboarding.can_pay_once %}
+                    <div class="col-12 col-md-6">
+                        <form
+                            id="molliepayments-oneoff"
+                            method="post"
+                            action="{{ 'molliepayments/checkout'|api_url }}"
+                        >
+                            <input
+                                type="hidden"
+                                name="CSRFToken"
+                                value="{{ CSRFToken }}"
+                            >
+                            <input
+                                type="hidden"
+                                name="invoice_id"
+                                value="{{ onboarding.invoice_id }}"
+                            >
+
+                            <button
+                                class="btn btn-outline-secondary w-100 text-wrap"
+                                type="submit"
+                            >
+                                Pay once
+                            </button>
+                        </form>
+                    </div>
+
+                    {% endif %}
+                    {% if onboarding.can_authorize %}
+                    <div class="col-12 col-md-6">
+                        <form
+                            id="molliepayments-onboarding"
+                            method="post"
+                            action="{{ 'molliepayments/onboarding_start'|api_url }}"
+                        >
+                            <input
+                                type="hidden"
+                                name="CSRFToken"
+                                value="{{ CSRFToken }}"
+                            >
+                            <input
+                                type="hidden"
+                                name="invoice_id"
+                                value="{{ onboarding.invoice_id }}"
+                            >
+                            <input
+                                type="hidden"
+                                name="consent_digest"
+                                value="{{ onboarding.consent_digest }}"
+                            >
+                            <input
+                                type="hidden"
+                                name="consent_version"
+                                value="{{ onboarding.consent_version }}"
+                            >
+
+                            <button
+                                class="btn btn-primary w-100 text-wrap"
+                                type="submit"
+                            >
+                                Authorize and pay
+                            </button>
+                        </form>
+                    </div>
+
+                    {% endif %}
+                </div>
+
+                <p class="small text-secondary mb-4">
+                    Renewal prices may change following advance notice.
+                    {% if onboarding.can_authorize %}Automatic recurring collection is not yet enabled in this release.{% endif %}
+                </p>
+
+            {% endif %}
+
+            {% if onboarding.can_resume %}
+                <form
+                    id="molliepayments-resume"
+                    class="mb-3"
+                    method="post"
+                    action="{{ 'molliepayments/checkout_resume'|api_url }}"
+                >
+                    <input
+                        type="hidden"
+                        name="CSRFToken"
+                        value="{{ CSRFToken }}"
+                    >
+                    <input
+                        type="hidden"
+                        name="invoice_id"
+                        value="{{ onboarding.invoice_id }}"
+                    >
+
+                    <button
+                        class="btn btn-primary text-wrap"
+                        type="submit"
+                    >
+                        Continue existing payment
+                    </button>
+                </form>
+            {% endif %}
+
+            {% if onboarding.can_verify %}
+                <form
+                    id="molliepayments-verify"
+                    class="mb-3"
+                    method="post"
+                    action="{{ 'molliepayments/onboarding_verify'|api_url }}"
+                >
+                    <input
+                        type="hidden"
+                        name="CSRFToken"
+                        value="{{ CSRFToken }}"
+                    >
+                    <input
+                        type="hidden"
+                        name="invoice_id"
+                        value="{{ onboarding.invoice_id }}"
+                    >
+
+                    <button
+                        class="btn btn-outline-secondary text-wrap"
+                        type="submit"
+                    >
+                        Check payment authorization
+                    </button>
+                </form>
+            {% endif %}
+
+            <p
+                id="molliepayments-result"
+                role="status"
+                aria-live="polite"
+                aria-atomic="true"
+                tabindex="-1"
+            ></p>
+
+        </div>
+    </div>
+</div>
+
+<script>
+(() => {
+    let busy = false;
+
+    const forms = document.querySelectorAll(
+        '#molliepayments-onboarding, ' +
+        '#molliepayments-oneoff, ' +
+        '#molliepayments-verify, ' +
+        '#molliepayments-resume'
+    );
+
+    const buttons = Array.from(
+        forms,
+        form => form.querySelector('button')
+    );
+
+    for (const form of forms) {
+        form.addEventListener('submit', async event => {
+            event.preventDefault();
+
+            if (busy) return;
+
+            busy = true;
+
+            const result = document.getElementById(
+                'molliepayments-result'
+            );
+
+            const button = form.querySelector('button');
+            const label = button.textContent;
+
+            const spinner = document.createElement('span');
+            spinner.className = 'spinner-border spinner-border-sm me-2';
+            spinner.setAttribute('aria-hidden', 'true');
+
+            button.textContent = 'Please wait…';
+            button.prepend(spinner);
+
+            buttons.forEach(item => item.disabled = true);
+            form.setAttribute('aria-busy', 'true');
+
+            result.textContent = 'Checking your payment securely…';
+
+            try {
+                const response = await fetch(form.action, {
+                    method: 'POST',
+                    credentials: 'same-origin',
+                    body: new FormData(form),
+                    headers: {
+                        'Accept': 'application/json'
+                    }
+                });
+
+                const body = await response.json();
+
+                if (!response.ok || body.error) {
+                    throw new Error(
+                        body.error?.message ||
+                        'Request failed. Reload the page to check your payment before retrying.'
+                    );
+                }
+
+                if (body.result?.checkout_url) {
+                    window.location.assign(body.result.checkout_url);
+                } else {
+                    window.location.reload();
+                }
+
+            } catch (error) {
+                result.textContent = error.message ||
+                    'Request failed. Reload the page before retrying.';
+
+                result.className = 'alert alert-danger';
+                result.focus();
+
+                // A payment may have been created despite a lost
+                // response. Require a reload before another attempt.
+                button.textContent = label;
+                form.removeAttribute('aria-busy');
+            }
+        });
+    }
+})();
+</script>
+{% endblock %}

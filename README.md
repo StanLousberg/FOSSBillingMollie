@@ -6,13 +6,19 @@
 
 An independent Mollie payment gateway and companion extension for FOSSBilling, using the official Mollie PHP SDK v4. No FOSSBilling core changes are required.
 
-**Development only; not production-ready.** One-time Hosted Checkout, verified webhooks, native invoice settlement, encrypted Test/Live credentials, connection testing and CLI recovery are implemented. Real Test-mode payments and public callbacks have been verified; remaining validation gaps are recorded in [VALIDATION.md](docs/VALIDATION.md). Internal opt-in Customer creation/reuse and CLI Customer recovery are implemented as a foundation for future onboarding; Customer creation, verification, idempotent retry and recovery have been validated against the real Test API using disposable fixtures. Recurring payments, mandates and refunds are not implemented.
+**Development only; not production-ready.** One-time Hosted Checkout, verified webhooks, native invoice settlement, encrypted Test/Live credentials, connection testing and CLI recovery are implemented. Real Test-mode payments and public callbacks have been verified; remaining validation gaps are recorded in [VALIDATION.md](docs/VALIDATION.md). Explicit customer consent, invoice-backed first-payment checkout, mandate verification and read-only onboarding recovery are implemented; see the [client URL and provider limitations](docs/PAYMENTS.md#first-payment-onboarding-issue-8). Internal Customer creation/reuse and CLI Customer recovery remain available; Customer creation, verification, idempotent retry and recovery have been validated against the real Test API using disposable fixtures. Automatic recurring collection, mandate management and refunds are not implemented. `supports_subscriptions` remains false.
 
 MolliePayments owns provider communication and payment-attempt idempotency. FOSSBilling owns balances, invoice pricing/tax, accounting and activation. Existing account credit is never reserved or split by this adapter; unsupported partial invoice allocations fail closed.
 
+Normal invoice checkout automatically offers the Bootstrap authorization page to authenticated owners of an eligible recurring-order invoice, before creating a payment attempt. Acceptance creates a `first` payment scoped to that order; **Pay once without future authorization** creates `oneoff` without a Customer or consent. One-time purchases, standalone/custom invoices, mixed invoices and invoices for multiple orders use ordinary one-time checkout. Hash-authorized guests can pay once but cannot authorize future collection. Automatic recurring collection is still disabled. Real Test first-payment, Customer details, public webhook and mandate evidence is recorded in [VALIDATION.md](docs/VALIDATION.md); intermittent browser/session failures and remaining cart-flow validation are documented separately.
+
+The recurring authorization page names your configured company and separates the current renewal price (after native renewal discounts, excluding tax) from the first invoice payment (including tax). Future collections remain disabled; actual renewal invoices determine future amounts.
+
+Gateway payment modes (`both`, `one_time_only`, `recurring_only`) are configured natively. Custom themes can submit explicit consent after native cart checkout and continue straight to Mollie; see the [theme integration contract and example](docs/CUSTOM_CART_CHECKOUT.md). Automatic renewal collection remains disabled.
+
 ## Development setup
 
-Requirements: PHP 8.3+, Composer 2, FOSSBilling development baseline `97bb583dd681e311e2d10fe8c648095f2a479878`, and a Mollie Test key for real checkout validation. Published FOSSBilling 0.8.9 is unsupported. CI also tests current upstream `main` with SQLite and MariaDB.
+Requirements: PHP 8.3+, Composer 2, FOSSBilling development baseline `7bc90195a535a03d33b4d0db91f41ba6989dee8a`, and a Mollie Test key for real checkout validation. Published FOSSBilling 0.8.9 is unsupported. CI also tests current upstream `main` with SQLite and MariaDB.
 
 1. Follow [INSTALLATION.md](docs/INSTALLATION.md) to prepare the separate host, install SDK dependencies and link the gateway/module. Reuse existing workspaces and DDEV configuration.
 2. Configure credentials in the native payment gateway settings and run **Extensions → MolliePayments → Settings → Test connection**.
@@ -28,6 +34,7 @@ From this repository, `composer install` installs the locked SDK into `module/Mo
 | `module/Molliepayments/` | Checkout, provider verification, attempts, connection settings and CLI recovery |
 | `module/Molliepayments/tests/` | Provider fakes with native SQLite accounting and separate MariaDB concurrency tests |
 | [AGENTS.md](AGENTS.md) | Permanent architecture and coding rules |
+| [Native reuse audit](docs/FOSSBILLING_NATIVE_REUSE_AUDIT.md) | Reviewed Core contracts, exact source revisions and retained integration safeguards |
 | [Core proposals](docs/FOSSBILLING_CORE_PROPOSALS.md) | Generic host capabilities proposed upstream; not implemented here |
 | [CONTRIBUTING.md](CONTRIBUTING.md) | Contribution workflow |
 | [SECURITY.md](SECURITY.md) | Private vulnerability reporting |
@@ -35,3 +42,5 @@ From this repository, `composer install` installs the locked SDK into `module/Mo
 This unofficial project is not affiliated with or endorsed by Mollie B.V. or FOSSBilling. **MolliePayments** is the product name; `StanLousberg/FOSSBillingMollie` is only the GitHub repository identifier.
 
 Source code is licensed under [Apache-2.0](LICENSE). Mollie's original logo and trademarks are separate from that license; see [BRANDING.md](docs/BRANDING.md).
+
+Pending mandate verification uses bounded native cron checks without new transactions or accounting changes. Readiness requires an explicit provider payment/mandate relation; expired pending records require manual review. See the [PR #18 final corrections and validation limits](docs/PR18_FINAL_FIXES.md); automatic collection remains disabled.

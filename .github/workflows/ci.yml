@@ -15,7 +15,7 @@ jobs:
     strategy:
       matrix:
         database: [sqlite, mariadb]
-        host: [97bb583dd681e311e2d10fe8c648095f2a479878, main]
+        host: [7bc90195a535a03d33b4d0db91f41ba6989dee8a, main]
     services:
       mariadb:
         image: mariadb:11.8
@@ -68,9 +68,11 @@ jobs:
 
       # FOSSBilling's tests/Pest.php bootstraps src/load.php, which needs a
       # valid config.php even when every test uses mocks and no DB connection.
-      # We copy the upstream sample only in this disposable CI test checkout.
+      # Materialize the sample once: its salt expression generates a new value
+      # on every include, which would break native encryption/decryption.
       - name: Create disposable FOSSBilling test configuration
-        run: cp fossbilling/src/config-sample.php fossbilling/src/config.php
+        run: |
+          php -r '$config = require "fossbilling/src/config-sample.php"; file_put_contents("fossbilling/src/config.php", "<?php\n\nreturn " . var_export($config, true) . ";\n");'
 
       - name: Link MolliePayments into the FOSSBilling test host
         run: |

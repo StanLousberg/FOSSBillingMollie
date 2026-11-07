@@ -4,6 +4,7 @@ declare(strict_types=1);
 
 namespace Box\Mod\Molliepayments\Entity;
 
+use Doctrine\DBAL\Types\Types;
 use Doctrine\ORM\Mapping as ORM;
 
 /** Module-owned audit record. Runtime writes use DBAL to avoid stale ORM state. */
@@ -56,21 +57,42 @@ class MolliePaymentAttempt
     #[ORM\Column(type: 'text')]
     public string $request;
 
-    #[ORM\Column(type: 'integer')]
-    public int $createdAt;
+    #[ORM\Column(type: Types::DATETIME_IMMUTABLE)]
+    public \DateTimeImmutable $createdAt;
 
-    #[ORM\Column(type: 'integer')]
-    public int $updatedAt;
+    #[ORM\Column(type: Types::DATETIME_IMMUTABLE)]
+    public \DateTimeImmutable $updatedAt;
 
     #[ORM\Column(length: 32, nullable: true)]
     public ?string $lease = null;
 
-    #[ORM\Column(type: 'integer')]
-    public int $leaseUntil = 0;
+    #[ORM\Column(type: Types::DATETIME_IMMUTABLE, nullable: true)]
+    public ?\DateTimeImmutable $leaseUntil = null;
 
     #[ORM\Column(type: 'integer', nullable: true)]
     public ?int $settledTransactionId = null;
 
     #[ORM\Column(length: 64, nullable: true)]
     public ?string $error = null;
+
+    #[ORM\Column(length: 32, nullable: true)]
+    public ?string $consentVersion = null;
+
+    #[ORM\Column(type: 'text', nullable: true)]
+    public ?string $consentText = null;
+
+    #[ORM\Column(type: Types::DATETIME_IMMUTABLE, nullable: true)]
+    public ?\DateTimeImmutable $consentAcceptedAt = null;
+
+    #[ORM\Column(length: 24, nullable: true)]
+    public ?string $onboardingStatus = null;
+
+    #[ORM\Column(length: 128, nullable: true)]
+    public ?string $mandateId = null;
+
+    #[ORM\Column(length: 24, nullable: true)]
+    public ?string $mandateStatus = null;
+
+    #[ORM\Column(type: Types::DATETIME_IMMUTABLE, nullable: true)]
+    public ?\DateTimeImmutable $mandateVerifiedAt = null;
 }

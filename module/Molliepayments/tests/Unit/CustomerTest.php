@@ -20,7 +20,7 @@ test('customer resolution is read only until explicitly requested and reuses wit
         ->and(mollieResolveCustomer($ctx, false))->toBe('cst_disposable')
         ->and(count($ctx->customerRequests))->toBe(2);
     expect(mollieResolveCustomer($ctx, false, true))->toBe('cst_disposable')->and(count($ctx->customerRequests))->toBe(4);
-    expect(array_keys(json_decode($row['request'], true)))->toBe(['metadata'])
+    expect(array_keys(json_decode($row['request'], true)))->toBe(['metadata', 'encrypted_details'])
         ->and($row['credential_fingerprint'])->not->toContain($ctx->key);
 });
 
@@ -60,7 +60,7 @@ test('customer unresolved creation cannot replay after the conservative idempote
     $ctx->customerResponses[CreateCustomerRequest::class] = new MockResponse([], 500);
     expect(fn () => mollieResolveCustomer($ctx))->toThrow(Payment_Exception::class);
     $row = mollieCustomerRow($ctx);
-    $ctx->db->update(CustomerRepository::TABLE, ['created_at' => time() - 2700], ['id' => $row['id']]);
+    $ctx->db->update(CustomerRepository::TABLE, ['created_at' => Box\Mod\Molliepayments\Support\Timestamps::now(-2700)], ['id' => $row['id']]);
     $before = count($ctx->customerRequests);
     expect(fn () => mollieResolveCustomer($ctx))->toThrow(Payment_Exception::class)
         ->and(count($ctx->customerRequests))->toBe($before + 1);
@@ -102,7 +102,7 @@ test('customer rejects rotated credentials and changed profile without rebinding
     mollieResolveCustomer($ctx);
     $ctx->profileId = 'pfl_other';
     expect(fn () => mollieResolveCustomer($ctx, false, true))->toThrow(Payment_Exception::class, 'profile context changed');
-    $ctx->gateway->setConfig(json_encode(['test_api_key' => mollieDummyKey('test')]));
+    $ctx->gateway->setConfig(mollieGatewayValue('config', ['test_api_key' => mollieDummyKey('test')]));
     $ctx->em->flush();
     $before = count($ctx->customerRequests);
     expect(fn () => mollieResolveCustomer($ctx))->toThrow(Payment_Exception::class, 'credential context changed')
@@ -134,7 +134,7 @@ test('customer denies cross client and unauthenticated access before network or 
 test('customer test and live mappings stay isolated and select only their saved key', function (): void {
     $ctx = mollieCustomers(molliePaymentContext());
     mollieResolveCustomer($ctx);
-    $ctx->gateway->setTestMode(false)->setConfig(json_encode(['api_key' => mollieDummyKey('live'), 'test_api_key' => $ctx->key]));
+    $ctx->gateway->setTestMode(false)->setConfig(mollieGatewayValue('config', ['api_key' => mollieDummyKey('live'), 'test_api_key' => $ctx->key]));
     $ctx->em->flush();
     expect(mollieResolveCustomer($ctx, false))->toBeNull();
     // Provider ID must differ between modes, as in the real API.
@@ -223,7 +223,7 @@ test('customer expired worker lease can retry without changing creation identity
     $ctx->customerResponses[CreateCustomerRequest::class] = new MockResponse([], 500);
     expect(fn () => mollieResolveCustomer($ctx))->toThrow(Payment_Exception::class);
     $row = mollieCustomerRow($ctx);
-    $ctx->db->update(CustomerRepository::TABLE, ['lease' => 'crashed-worker', 'lease_until' => time() - 1], ['id' => $row['id']]);
+    $ctx->db->update(CustomerRepository::TABLE, ['lease' => 'crashed-worker', 'lease_until' => Box\Mod\Molliepayments\Support\Timestamps::now(-1)], ['id' => $row['id']]);
     $ctx->customerResponses[CreateCustomerRequest::class] = $response;
     expect(mollieResolveCustomer($ctx))->toBe('cst_disposable')
         ->and(mollieCustomerRow($ctx)['idempotency_key'])->toBe($row['idempotency_key']);
@@ -255,7 +255,7 @@ test('customer expired creation retains its specific recovery diagnostic', funct
     $ctx->customerResponses[CreateCustomerRequest::class] = new MockResponse([], 500);
     expect(fn () => mollieResolveCustomer($ctx))->toThrow(Payment_Exception::class);
     $row = mollieCustomerRow($ctx);
-    $ctx->db->update(CustomerRepository::TABLE, ['created_at' => time() - 2700], ['id' => $row['id']]);
+    $ctx->db->update(CustomerRepository::TABLE, ['created_at' => Box\Mod\Molliepayments\Support\Timestamps::now(-2700)], ['id' => $row['id']]);
     foreach ([1, 2] as $retry) {
         expect(fn () => mollieResolveCustomer($ctx))->toThrow(Payment_Exception::class, 'requires operator recovery')
             ->and(mollieCustomerRow($ctx)['error'])->toBe('recovery_required')
@@ -330,7 +330,7 @@ test('customer unresolved creation cannot replay with a rotated credential', fun
     expect(fn () => mollieResolveCustomer($ctx))->toThrow(Payment_Exception::class);
     $before = mollieCustomerRow($ctx);
     $requests = count($ctx->customerRequests);
-    $ctx->gateway->setConfig(json_encode(['test_api_key' => mollieDummyKey('test')]));
+    $ctx->gateway->setConfig(mollieGatewayValue('config', ['test_api_key' => mollieDummyKey('test')]));
     $ctx->em->flush();
     expect(fn () => mollieResolveCustomer($ctx))->toThrow(Payment_Exception::class, 'credential context changed')
         ->and(mollieCustomerRow($ctx))->toBe($before)

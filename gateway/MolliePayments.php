@@ -20,6 +20,7 @@ class Payment_Adapter_MolliePayments extends Payment_AdapterAbstract
     {
         // Admin configuration validation has no callback URLs. Checkout URLs
         // are resolved afresh by PaymentService through the native host service.
+        Box\Mod\Molliepayments\Support\PaymentMode::resolve($config['payment_mode'] ?? null);
         $this->_config = $config;
         $this->testMode = (bool) ($config['test_mode'] ?? false);
         if (!isset($config['gateway_id'])) {
@@ -43,6 +44,14 @@ class Payment_Adapter_MolliePayments extends Payment_AdapterAbstract
                 'width' => '32px',
             ],
             'form' => [
+                'payment_mode' => ['select', [
+                    'label' => 'Payment mode',
+                    'multiOptions' => [
+                        'both' => 'One-time payments and recurring authorization',
+                        'one_time_only' => 'One-time payments only',
+                        'recurring_only' => 'Recurring authorization only',
+                    ],
+                ]],
                 'api_key' => ['password', [
                     'label' => 'Live API Key (live_xxx)',
                     'secret' => true,
@@ -62,7 +71,7 @@ class Payment_Adapter_MolliePayments extends Payment_AdapterAbstract
         if ($subscription || filter_var($invoice_id, FILTER_VALIDATE_INT, ['options' => ['min_range' => 1]]) === false) {
             throw new Payment_Exception('MolliePayments requires a valid one-time invoice payment.');
         }
-        $url = $this->payments()->checkout((int) $invoice_id, (int) $this->getParam('gateway_id'));
+        $url = $this->payments()->checkoutRoute((int) $invoice_id, (int) $this->getParam('gateway_id'));
         if ($url === null) {
             return '<p>Mollie is processing this payment. Return to the invoice to check its current status.</p>';
         }

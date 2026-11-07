@@ -39,6 +39,24 @@ final class CustomerService
         return $this->run($clientId, $gatewayId, $create, $verify);
     }
 
+    /** Trusted webhook path. Reads the committed attempt; never creates or impersonates a client. */
+    public function verifyOnboardingCustomer(string $attemptId): void
+    {
+        $attempt = (new Repository\AttemptRepository($this->customers->connection))->find($attemptId);
+        $payload = json_decode($attempt['request'], true, 512, JSON_THROW_ON_ERROR);
+        $mapping = $this->customers->find((int) $attempt['client_id'], (int) $attempt['gateway_id'], $attempt['environment']);
+        if ($attempt['status'] !== 'paid' || $attempt['settled_transaction_id'] === null || $attempt['consent_version'] === null
+            || ($payload['sequenceType'] ?? null) !== 'first' || $mapping === null
+            || $mapping['id'] !== ($payload['metadata']['customer_mapping'] ?? null)
+            || $mapping['profile_id'] !== ($payload['metadata']['profile_id'] ?? null)
+            || $mapping['customer_id'] !== ($payload['customerId'] ?? null)) {
+            throw new \Payment_Exception('Unverified onboarding Customer context.');
+        }
+        if ($this->run((int) $attempt['client_id'], (int) $attempt['gateway_id'], false, true) !== $payload['customerId']) {
+            throw new \Payment_Exception('Onboarding Customer verification failed.');
+        }
+    }
+
     /** Explicit operator recovery, authenticated GET only, never a replacement POST. */
     public function recover(int $clientId, int $gatewayId, string $mappingId, string $customerId): string
     {
@@ -56,7 +74,8 @@ final class CustomerService
         if ($db->isTransactionActive()) {
             throw new \Payment_Exception('Customer operations require a committed database connection.');
         }
-        if ($clientId < 1 || !$this->di['em']->find(Client::class, $clientId) instanceof Client) {
+        $nativeClient = $clientId > 0 ? $this->di['em']->find(Client::class, $clientId) : null;
+        if (!$nativeClient instanceof Client) {
             throw new \Payment_Exception('Customer not found.', [], 404);
         }
         [$environment, $key] = $this->context($gatewayId);
@@ -90,14 +109,14 @@ final class CustomerService
                 'id' => $id, 'client_id' => $clientId, 'gateway_id' => $gatewayId, 'environment' => $environment,
                 'profile_id' => $profile->id, 'customer_id' => null, 'status' => 'creating',
                 'idempotency_key' => $id, 'credential_fingerprint' => hash_hmac('sha256', $id, $key),
-                'request' => json_encode(['metadata' => ['molliepayments_customer' => $id]], JSON_THROW_ON_ERROR),
-                'created_at' => time(), 'updated_at' => time(), 'lease' => null, 'lease_until' => 0, 'error' => null,
+                'request' => Support\CustomerRequest::snapshot($nativeClient, $id, $this->di['crypt']),
+                'created_at' => Support\Timestamps::now(), 'updated_at' => Support\Timestamps::now(), 'lease' => null, 'lease_until' => null, 'error' => null,
             ]);
         }
         $this->assertCredential($row, $key);
         $lease = bin2hex(random_bytes(16));
         if (!$this->customers->acquire($row['id'], $lease)) {
-            throw new \Payment_Exception('Customer operation already in progress. Retry later.');
+            throw new Support\ProviderUnavailableException('Customer operation already in progress. Retry later.', [], 409);
         }
         try {
             $row = $this->customers->find($clientId, $gatewayId, $environment);
@@ -113,16 +132,16 @@ final class CustomerService
                 if (!$create) {
                     throw new \Payment_Exception('Customer creation requires an explicit request.');
                 }
-                if (time() - (int) $row['created_at'] >= 2700) {
+                if (Support\Timestamps::expired($row['created_at'], 2700)) {
                     $this->customers->update($row['id'], $lease, ['error' => 'recovery_required']);
                     throw new \Payment_Exception('Unresolved Customer creation requires operator recovery.');
                 }
             }
             try {
                 if ($providerId === null) {
-                    $payload = json_decode($row['request'], true, 512, JSON_THROW_ON_ERROR);
+                    $payload = Support\CustomerRequest::payload($row['request'], $row['id'], $this->di['crypt']);
                     $client->setIdempotencyKey($row['idempotency_key']);
-                    $customer = $this->provider(fn () => $client->send(new CreateCustomerRequest(metadata: $payload['metadata'])));
+                    $customer = $this->provider(fn () => $client->send(new CreateCustomerRequest(name: $payload['name'] ?? null, email: $payload['email'] ?? null, metadata: $payload['metadata'])));
                 } else {
                     $customer = $this->provider(fn () => $client->send(new GetCustomerRequest($providerId)));
                 }
@@ -136,6 +155,9 @@ final class CustomerService
                 $this->customers->update($row['id'], $lease, ['customer_id' => $customer->id, 'status' => 'ready', 'error' => null]);
 
                 return $customer->id;
+            } catch (Support\ProviderUnavailableException $error) {
+                $this->customers->update($row['id'], $lease, ['error' => 'provider_unavailable']);
+                throw $error;
             } catch (\Throwable) {
                 $this->customers->update($row['id'], $lease, ['error' => 'verification_or_provider_error', 'status' => $row['customer_id'] === null ? 'creating' : 'blocked']);
                 throw new \Payment_Exception('Customer operation unavailable or unverified. The mapping is preserved; retry safely or use operator recovery.');
@@ -181,9 +203,14 @@ final class CustomerService
     {
         try {
             return $request();
+        } catch (\Mollie\Api\Exceptions\ApiException $error) {
+            if (!in_array($error->getStatusCode(), [408, 429], true) && $error->getStatusCode() < 500) {
+                throw new \Payment_Exception('Mollie Customer request was rejected. Verify the saved context.');
+            }
+            throw new Support\ProviderUnavailableException('Mollie Customer service temporarily unavailable. The mapping is preserved; retry safely later.', [], 503);
         } catch (\Throwable) {
             // Never chain SDK exceptions: their requests may contain secrets or personal data.
-            throw new \Payment_Exception('Mollie Customer service unavailable. Retry safely later.');
+            throw new Support\ProviderUnavailableException('Mollie Customer service temporarily unavailable. The mapping is preserved; retry safely later.', [], 503);
         }
     }
 }
