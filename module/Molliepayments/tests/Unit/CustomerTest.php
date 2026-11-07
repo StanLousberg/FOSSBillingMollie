@@ -20,7 +20,7 @@ test('customer resolution is read only until explicitly requested and reuses wit
         ->and(mollieResolveCustomer($ctx, false))->toBe('cst_disposable')
         ->and(count($ctx->customerRequests))->toBe(2);
     expect(mollieResolveCustomer($ctx, false, true))->toBe('cst_disposable')->and(count($ctx->customerRequests))->toBe(4);
-    expect(array_keys(json_decode($row['request'], true)))->toBe(['metadata'])
+    expect(array_keys(json_decode($row['request'], true)))->toBe(['metadata', 'encrypted_details'])
         ->and($row['credential_fingerprint'])->not->toContain($ctx->key);
 });
 

@@ -74,7 +74,8 @@ final class CustomerService
         if ($db->isTransactionActive()) {
             throw new \Payment_Exception('Customer operations require a committed database connection.');
         }
-        if ($clientId < 1 || !$this->di['em']->find(Client::class, $clientId) instanceof Client) {
+        $nativeClient = $clientId > 0 ? $this->di['em']->find(Client::class, $clientId) : null;
+        if (!$nativeClient instanceof Client) {
             throw new \Payment_Exception('Customer not found.', [], 404);
         }
         [$environment, $key] = $this->context($gatewayId);
@@ -108,7 +109,7 @@ final class CustomerService
                 'id' => $id, 'client_id' => $clientId, 'gateway_id' => $gatewayId, 'environment' => $environment,
                 'profile_id' => $profile->id, 'customer_id' => null, 'status' => 'creating',
                 'idempotency_key' => $id, 'credential_fingerprint' => hash_hmac('sha256', $id, $key),
-                'request' => json_encode(['metadata' => ['molliepayments_customer' => $id]], JSON_THROW_ON_ERROR),
+                'request' => Support\CustomerRequest::snapshot($nativeClient, $id, $this->di['crypt']),
                 'created_at' => time(), 'updated_at' => time(), 'lease' => null, 'lease_until' => 0, 'error' => null,
             ]);
         }
@@ -138,9 +139,9 @@ final class CustomerService
             }
             try {
                 if ($providerId === null) {
-                    $payload = json_decode($row['request'], true, 512, JSON_THROW_ON_ERROR);
+                    $payload = Support\CustomerRequest::payload($row['request'], $row['id'], $this->di['crypt']);
                     $client->setIdempotencyKey($row['idempotency_key']);
-                    $customer = $this->provider(fn () => $client->send(new CreateCustomerRequest(metadata: $payload['metadata'])));
+                    $customer = $this->provider(fn () => $client->send(new CreateCustomerRequest(name: $payload['name'] ?? null, email: $payload['email'] ?? null, metadata: $payload['metadata'])));
                 } else {
                     $customer = $this->provider(fn () => $client->send(new GetCustomerRequest($providerId)));
                 }

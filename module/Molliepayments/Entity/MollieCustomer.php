@@ -6,7 +6,7 @@ namespace Box\Mod\Molliepayments\Entity;
 
 use Doctrine\ORM\Mapping as ORM;
 
-/** Minimal provider mapping; no duplicated client personal information. */
+/** Provider mapping with an encrypted immutable creation snapshot; no plaintext personal fields. */
 #[ORM\Entity]
 #[ORM\Table(name: 'molliepayments_customer')]
 #[ORM\UniqueConstraint(name: 'mp_customer_context', columns: ['client_id', 'gateway_id', 'environment'])]

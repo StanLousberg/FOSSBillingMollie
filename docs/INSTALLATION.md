@@ -117,3 +117,12 @@ Use the configured `SYSTEM_URL` origin consistently for login, invoice navigatio
 The v1 manifest omits legacy `icon_url`; newer FOSSBilling builds discover the unchanged root `icon.svg` themselves. The pinned preview baseline predates that discovery and may display the host's default icon in the extension list. Native inline SVG loading and the gateway logo remain available on both hosts. Do not restore the invalid manifest field to change this cosmetic fallback. A 404 when refreshing MolliePayments from the FOSSBilling extension directory is separate: this independent module is not available at that directory endpoint. Use the local installation/update procedure rather than the directory refresh action. A local manifest change cannot publish a directory listing.
 
 Profile payment-method eligibility and mandate association/scope limitations are in [PAYMENTS.md](PAYMENTS.md#first-payment-onboarding-issue-8). After a financially paid checkout, use the same page to recheck a missing/pending mandate; do not create another invoice/payment to retry verification. Real Hosted Checkout and public webhook validation remain separate from mocked CI tests.
+
+
+## Customer detail and transaction-link review
+
+This update needs no new columns or tables. New Customer requests send validated native names/emails and keep their immutable personal-field snapshot encrypted through FOSSBilling's `crypt` service in the existing request column. Preserve the host encryption secret alongside database backups for unresolved creation retries. Existing metadata-only requests and valid Customer IDs remain compatible and are not silently enriched or replaced.
+
+Use `php module/Molliepayments/bin/diagnose-transactions.php /absolute/path/to/FOSSBilling/src` for read-only orphan inventory. Do not backfill processed transaction associations or replay paid accounting. Unprocessed errors may use the native permission-checked processing action and original provider context. See [the verified association contract](PAYMENTS.md#verified-transaction-invoice-association).
+
+The authoritative display timezone is the host `i18n.timezone`, initialized by FOSSBilling bootstrap; do not add offsets to module INTEGER epoch values. The existing status CLI now includes readable local ISO timestamps next to epochs. This review adds no timezone configuration or historical data conversion.

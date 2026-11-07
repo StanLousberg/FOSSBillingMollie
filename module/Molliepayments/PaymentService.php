@@ -411,12 +411,27 @@ final class PaymentService
         $this->assertNoLegacyCredit($attempt);
         [, $environment, $key] = $this->gateway($gatewayId);
         $tx = $this->di['em']->getRepository(Transaction::class)->find($transactionId);
+        if ($tx instanceof Transaction) {
+            $this->di['em']->refresh($tx);
+        }
+        $callbackInvoice = $data['get']['invoice_id'] ?? null;
         if (!$tx instanceof Transaction || (int) $tx->getGateway()?->getId() !== $gatewayId
-            || (int) $tx->getInvoice()?->getId() !== (int) $attempt['invoice_id']
-            || (string) ($data['get']['invoice_id'] ?? '') !== (string) $attempt['invoice_id']
+            || ($tx->getTxnId() !== null && $tx->getTxnId() !== $paymentId)
+            || ($tx->getInvoice() !== null && (int) $tx->getInvoice()->getId() !== (int) $attempt['invoice_id'])
+            || ($callbackInvoice !== null && ((!is_string($callbackInvoice) && !is_int($callbackInvoice)) || (string) $callbackInvoice !== (string) $attempt['invoice_id']))
             || (int) $attempt['gateway_id'] !== $gatewayId || $attempt['environment'] !== $environment
             || ($attempt['payment_id'] !== null && $attempt['payment_id'] !== $paymentId)) {
             throw new \Payment_Exception('Mollie callback does not match its local invoice, gateway or environment.', [], 409);
+        }
+        if ($tx->getStatus() === Transaction::STATUS_PROCESSED) {
+            if ($tx->getInvoice() === null) {
+                throw new \Payment_Exception('Processed transaction history cannot be relinked. Use read-only diagnostics and operator review.', [], 409);
+            }
+
+            return;
+        }
+        if ($tx->getStatus() !== Transaction::STATUS_PROCESSING) {
+            throw new \Payment_Exception('Transaction processing claim is required.', [], 409);
         }
         if ($attempt['consent_version'] !== null && !hash_equals($attempt['credential_fingerprint'], hash_hmac('sha256', $attempt['id'], $key))) {
             throw new \Payment_Exception('Onboarding credential context changed. Operator reconciliation required.', [], 409);
@@ -425,8 +440,8 @@ final class PaymentService
         $attempt = $this->synchronize($attempt, $payment);
         if ($attempt['status'] !== 'paid') {
             $this->attempts->connection->transactional(function () use ($tx, $attempt): void {
-                [, $current] = $this->lockInvoiceAttempt($attempt);
-                $this->di['em']->refresh($tx);
+                [$invoice, $current] = $this->lockInvoiceAttempt($attempt);
+                $this->associateTransaction($tx, $invoice, $current);
                 if ($tx->getStatus() !== Transaction::STATUS_PROCESSED && $current['status'] !== 'paid') {
                     $terminal = in_array($current['status'], self::TERMINAL_STATUSES, true);
                     $tx->setTxnId($current['payment_id']);
@@ -459,15 +474,34 @@ final class PaymentService
         (new MandateService($this->di, $this->clientFactory))->verify($attempt['id'], $payment);
     }
 
+    /** Caller holds invoice then attempt locks; attach only after authenticated payment verification. */
+    private function associateTransaction(Transaction $tx, Invoice $invoice, array $attempt): void
+    {
+        $db = $this->attempts->connection;
+        $table = $db->quoteSingleIdentifier('transaction');
+        // Native claim owns processing. Lock against concurrent administrative association changes.
+        $db->executeStatement("UPDATE {$table} SET id = id WHERE id = ?", [$tx->getId()]);
+        $this->di['em']->refresh($tx);
+        if ((int) $tx->getGateway()?->getId() !== (int) $attempt['gateway_id']
+            || ($tx->getTxnId() !== null && $tx->getTxnId() !== $attempt['payment_id'])
+            || ($tx->getInvoice() !== null && (int) $tx->getInvoice()->getId() !== (int) $invoice->getId())
+            || (int) $invoice->getClientId() !== (int) $attempt['client_id'] || $invoice->getCurrency() !== $attempt['currency']) {
+            throw new \Payment_Exception('Verified transaction association changed.', [], 409);
+        }
+        if ($tx->getStatus() !== Transaction::STATUS_PROCESSING) {
+            throw new \Payment_Exception('Transaction processing claim is required.', [], 409);
+        }
+        if ($tx->getInvoice() === null) {
+            $tx->setInvoice($invoice);
+            $this->di['em']->flush();
+        }
+    }
+
     private function settle(array $attempt, Transaction $tx): bool
     {
         return $this->attempts->connection->transactional(function () use ($attempt, $tx): bool {
             [$invoice, $attempt] = $this->lockInvoiceAttempt($attempt);
-            $this->di['em']->refresh($tx);
-            if ((int) $tx->getGateway()?->getId() !== (int) $attempt['gateway_id']
-                || (int) $tx->getInvoice()?->getId() !== (int) $attempt['invoice_id']) {
-                throw new \Payment_Exception('Transaction association changed.');
-            }
+            $this->associateTransaction($tx, $invoice, $attempt);
             if ($attempt['settled_transaction_id'] !== null) {
                 // A delivery has its own audit row, but never another accounting entry.
                 if ((int) $attempt['settled_transaction_id'] !== (int) $tx->getId()) {

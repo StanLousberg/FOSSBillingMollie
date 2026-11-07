@@ -18,9 +18,15 @@ try {
     // Operational identifiers only: never print credentials, request URLs,
     // customer details, raw provider responses or financial account data.
     $rows = $di['em']->getConnection()->fetchAllAssociative(
-        'SELECT id, invoice_id, gateway_id, payment_id, environment, status, settled_transaction_id, error
+        'SELECT id, invoice_id, gateway_id, payment_id, environment, status, settled_transaction_id, error, created_at, updated_at, consent_accepted_at, mandate_verified_at, lease_until
          FROM molliepayments_attempt ORDER BY created_at DESC, id DESC LIMIT 10'
     );
+    foreach ($rows as &$row) {
+        foreach (['created_at', 'updated_at', 'consent_accepted_at', 'mandate_verified_at', 'lease_until'] as $field) {
+            $row[$field . '_local'] = Box\Mod\Molliepayments\Support\Timestamps::present($row[$field] === null ? null : (int) $row[$field]);
+        }
+    }
+    unset($row);
     fwrite(STDOUT, json_encode($rows, JSON_PRETTY_PRINT | JSON_THROW_ON_ERROR) . "\n");
 } catch (Throwable) {
     fwrite(STDERR, "Could not inspect MolliePayments attempts. Verify the installation and schema.\n");

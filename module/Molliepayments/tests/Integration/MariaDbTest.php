@@ -472,3 +472,50 @@ test('MariaDB onboarding migration adds nullable evidence without changing histo
         expect($after)->toBe($rows);
     }
 });
+
+require_once dirname(__DIR__) . '/TransactionContext.php';
+
+test('MariaDB orphan callback workers attach verified invoices and settle once', function (bool $first): void {
+    $ctx = mollieOnboarding(mollieMariaContext());
+    $first ? mollieFirst($ctx) : $ctx->payments->checkout($ctx->invoice->getId(), $ctx->gateway->getId());
+    $ctx->db->close();
+    $job = static function (): void {
+        $child = mollieOnboarding(mollieMariaContext(false));
+        $child->status = 'paid';
+        $tx = mollieOrphan($child, false);
+        $child->transactionService->preProcessTransaction($tx);
+        $child->em->refresh($tx);
+        expect($tx->getInvoice()?->getId())->toBe($child->invoice->getId());
+        $child->db->close();
+    };
+    mollieMariaWorkers([$job, $job]);
+    $check = mollieOnboarding(mollieMariaContext(false));
+    $table = $check->db->quoteSingleIdentifier('transaction');
+    expect((int) $check->db->fetchOne("SELECT COUNT(*) FROM {$table} WHERE invoice_id IS NULL"))->toBe(0)
+        ->and((int) $check->db->fetchOne("SELECT COUNT(*) FROM client_balance WHERE type = 'transaction'"))->toBe(1)
+        ->and($check->invoice->getStatus())->toBe('paid');
+})->with([true, false]);
+
+test('MariaDB epochs and native DATETIME do not inherit database session offsets', function (string $zone): void {
+    $previous = date_default_timezone_get();
+    try {
+        date_default_timezone_set($zone);
+        $ctx = mollieOnboarding(mollieMariaContext());
+        $ctx->db->executeStatement("SET time_zone = '+05:30'");
+        mollieFirst($ctx);
+        $ctx->status = 'paid';
+        $tx = mollieOrphan($ctx);
+        $ctx->transactionService->preProcessTransaction($tx);
+        $ctx->em->refresh($tx);
+        $table = $ctx->db->quoteSingleIdentifier('transaction');
+        $raw = $ctx->db->fetchOne("SELECT updated_at FROM {$table} WHERE id = ?", [$tx->getId()]);
+        expect($raw)->toBe($tx->getUpdatedAt()->format('Y-m-d H:i:s'))
+            ->and($tx->getUpdatedAt()->getTimezone()->getName())->toBe($zone);
+        foreach ([mollieAttempt($ctx)['created_at'], mollieCustomerRow($ctx)['created_at'], mollieAttempt($ctx)['consent_accepted_at'], mollieAttempt($ctx)['mandate_verified_at']] as $epoch) {
+            expect((int) $epoch)->toBeGreaterThanOrEqual(time() - 15)->toBeLessThanOrEqual(time());
+        }
+        $ctx->db->close();
+    } finally {
+        date_default_timezone_set($previous);
+    }
+})->with(['UTC', 'Europe/Amsterdam']);

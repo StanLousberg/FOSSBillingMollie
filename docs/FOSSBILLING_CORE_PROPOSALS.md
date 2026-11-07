@@ -26,3 +26,12 @@ Issue #7 adds only Mollie-specific Customer identifiers, creation identity and r
 
 
 Issue #8 review: recurring-order recognition and order-scoped mandate authorization are provider integration concerns and use existing native invoice/order entities. No invoice calculation, renewal scheduler or generic subscription mechanism is added. Fixed-total native subscription eligibility is deliberately kept separate. The observed authenticated CSRF/session mismatch also affects a native API and remains a host investigation; this adapter preserves security rather than implementing a replacement session/nonce mechanism. See `docs/VALIDATION.md`.
+
+
+## Native transaction association recovery
+
+`ServiceTransaction::create()` associates only its top-level `invoice_id`; nested stored IPN `get.invoice_id` is an untrusted hint. Permissive/historical creation can retain such a hint without an association. Current `ipn.php` forwards the top-level ID, so nested data alone does not establish which historical caller omitted it. MolliePayments can safely attach an existing verified attempt invoice to a currently claimed, unprocessed transaction through the public entity relation and Doctrine, under invoice/attempt/transaction locks. This requires no host patch and does not trust the GET hint.
+
+A reusable host contract for provider-verified association of a claimed transaction, with compare-and-set semantics and explicit processed-history protections, would benefit other gateways. Processed associations are currently frozen by native updates. Historical corrections therefore require a separately designed, permission-checked, audited **association-only** upstream workflow with independent provider verification; it must preserve transaction amounts, balances, invoice paid state and settlement audit records. This extension deliberately provides only read-only orphan diagnostics and no SQL backfill or alternative financial engine.
+
+The current form-IPN entry point also requires an invoice ID before adapter dispatch. Consequently an unbound public Mollie callback cannot be rescued inside the adapter at all. Generated MolliePayments URLs remain invoice-bound; an upstream provider-authenticated dispatch/association contract would be needed to support unbound public callbacks without trusting nested GET data or weakening creation validation.
