@@ -115,7 +115,7 @@ test('incomplete mandate never prevents invoice settlement and can recover using
         ->and(count(array_filter($ctx->requests, static fn ($request) => $request->getMethod() === 'POST')))->toBe(1)
         ->and($ctx->db->fetchOne('SELECT COUNT(*) FROM client_balance'))->toBe(2);
 })->with([
-    ['missing', 'manual_review'], ['pending', 'pending_mandate'], ['invalid', 'mandate_invalid'],
+    ['missing', 'pending_mandate'], ['pending', 'pending_mandate'], ['invalid', 'mandate_invalid'],
     ['scope', 'manual_review'], ['unavailable', 'pending_mandate'], ['owner', 'manual_review'], ['link', 'manual_review'],
     ['mode', 'manual_review'], ['id', 'manual_review'], ['method', 'manual_review'],
 ]);

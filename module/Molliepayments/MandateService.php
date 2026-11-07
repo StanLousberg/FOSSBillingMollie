@@ -12,7 +12,6 @@ use Box\Mod\Molliepayments\Support\ProviderUnavailableException;
 use Mollie\Api\Exceptions\ApiException;
 use Mollie\Api\Http\Requests\GetMandateRequest;
 use Mollie\Api\Http\Requests\GetPaginatedMandateRequest;
-use Mollie\Api\MollieApiClient;
 use Mollie\Api\Resources\Mandate;
 use Mollie\Api\Resources\Payment;
 
@@ -23,18 +22,21 @@ final class MandateService
     {
     }
 
-    public function verify(string $attemptId, Payment $payment): void
+    public function verify(string $attemptId, Payment $payment, ?string $ownedLease = null): void
     {
         $attempts = new AttemptRepository($this->di['em']->getConnection());
         $attempt = $attempts->find($attemptId);
         if ($attempt['consent_version'] === null || $attempt['settled_transaction_id'] === null || !$payment->isPaid()) {
             return;
         }
-        $lease = bin2hex(random_bytes(16));
-        if (!$attempts->acquire($attemptId, $lease)) {
+        $lease = $ownedLease ?? bin2hex(random_bytes(16));
+        if ($ownedLease === null && !$attempts->acquire($attemptId, $lease)) {
             return;
         }
         $attempt = $attempts->find($attemptId);
+        if ($attempt['lease'] !== $lease || $attempt['lease_until'] === null || $attempt['lease_until'] < Support\Timestamps::now()) {
+            return;
+        }
         $changes = ['onboarding_status' => 'pending_mandate', 'mandate_verified_at' => null];
         $category = 'pending';
         try {
@@ -80,12 +82,10 @@ final class MandateService
             if ($mandateId !== null && $attempt['mandate_id'] !== null && $attempt['mandate_id'] !== $mandateId) {
                 throw new \UnexpectedValueException();
             }
-            // A previously verified association is sticky, even if later Payment GETs omit it.
-            $mandateId ??= $attempt['mandate_id'];
-            $discovered = $mandateId === null;
-            $mandateId ??= $this->discover($client, $payment, $expected);
+            // Instrument/time similarity (and a stored ID alone) cannot prove payment association.
+            // Require the authenticated Payment's explicit relation on every successful check.
             if ($mandateId === null) {
-                if (Support\Timestamps::expired($attempt['consent_accepted_at'], 86400)) {
+                if (Support\Timestamps::expired($attempt['created_at'], 604800)) {
                     throw new \UnexpectedValueException();
                 }
 
@@ -108,7 +108,7 @@ final class MandateService
                 return;
             }
             $this->assertMandate($mandate, $payload['customerId'], $attempt['environment'], $expected);
-            if ($mandate->id !== $mandateId || ($discovered && !$this->matchesInstrument($payment, $mandate, $expected))) {
+            if ($mandate->id !== $mandateId) {
                 throw new \UnexpectedValueException();
             }
             $status = $mandate->status instanceof \BackedEnum ? $mandate->status->value : $mandate->status;
@@ -173,56 +173,6 @@ final class MandateService
             || (isset($mandate->scopes) && (!is_array($mandate->scopes) || !in_array('customer-not-present', $mandate->scopes, true)))) {
             throw new \UnexpectedValueException();
         }
-    }
-
-    /** One bounded, complete scope-filtered page; select only one strong instrument/time match. */
-    private function discover(MollieApiClient $client, Payment $payment, string $method): ?string
-    {
-        if ($this->instrument($payment->details, $method) === null || $payment->createdAt === null || $payment->paidAt === null) {
-            throw new \UnexpectedValueException();
-        }
-        $mandates = $client->send(new GetPaginatedMandateRequest($payment->customerId, limit: 250, scopes: ['customer-not-present']));
-        if (isset($mandates->_links->next->href)) {
-            throw new \UnexpectedValueException(); // Incomplete search cannot prove uniqueness.
-        }
-        $matches = [];
-        foreach ($mandates as $mandate) {
-            $this->assertMandate($mandate, $payment->customerId, $payment->mode, $mandate->method ?? '');
-            if ($mandate->method === $method && $this->matchesInstrument($payment, $mandate, $method)) {
-                $matches[$mandate->id] = true;
-            }
-        }
-        if (count($matches) > 1) {
-            throw new \UnexpectedValueException();
-        }
-
-        return array_key_first($matches);
-    }
-
-    private function matchesInstrument(Payment $payment, Mandate $mandate, string $method): bool
-    {
-        $instrument = $this->instrument($payment->details, $method);
-        $created = $mandate->createdAt === null ? false : strtotime($mandate->createdAt);
-        $start = $payment->createdAt === null ? false : strtotime($payment->createdAt);
-        $paid = $payment->paidAt === null ? false : strtotime($payment->paidAt);
-
-        return $instrument !== null && $instrument === $this->instrument($mandate->details, $method)
-            && $created !== false && $start !== false && $paid !== false && $created >= $start && $created <= min(time() + 60, $paid + 86400);
-    }
-
-    private function instrument(?object $details, string $method): ?string
-    {
-        $value = $method === 'creditcard' ? ($details->cardFingerprint ?? null) : ($details->consumerAccount ?? null);
-        if (!is_string($value) || $value === '') {
-            return null;
-        }
-        if ($method === 'directdebit') {
-            $value = strtoupper(str_replace(' ', '', $value));
-
-            return preg_match('/^[A-Z]{2}[0-9]{2}[A-Z0-9]{11,30}$/D', $value) ? $value : null;
-        }
-
-        return $value; // Full PayPal account reference or card fingerprint; never last-four/name matching.
     }
 
     private function onOutage(array $attempt): array

@@ -440,8 +440,8 @@ test('MariaDB first payment lost response reuses durable consent and recovers mi
     $retry->status = 'paid';
     $retry->mandateId = null;
     mollieWebhook($retry);
-    // No instrument evidence is returned in this fixture: require review until a verified payment link appears.
-    expect($retry->invoice->getStatus())->toBe('paid')->and(mollieAttempt($retry)['onboarding_status'])->toBe('manual_review')
+    // A missing explicit relationship remains pending until the payment exposes its mandate.
+    expect($retry->invoice->getStatus())->toBe('paid')->and(mollieAttempt($retry)['onboarding_status'])->toBe('pending_mandate')
         ->and(mollieAttempt($retry)['request'])->toBe($original['request'])
         ->and(mollieAttempt($retry)['consent_accepted_at'])->toBe($original['consent_accepted_at']);
     $retry->mandateId = 'mdt_disposable';
@@ -619,11 +619,16 @@ test('MariaDB missing mandate IDs recover pending to valid with concurrent nativ
     mollieWebhook($ctx);
     $before = mollieAttempt($ctx);
     expect($before['onboarding_status'])->toBe('pending_mandate');
+    $ctx->db->update('molliepayments_attempt', ['updated_at' => Box\Mod\Molliepayments\Support\Timestamps::now(-360)], ['id' => $before['id']]);
+    $transactionCount = (int) $ctx->db->fetchOne('SELECT COUNT(*) FROM ' . $ctx->db->quoteSingleIdentifier('transaction'));
+    $ledger = $ctx->db->fetchAllAssociative('SELECT * FROM client_balance ORDER BY id');
     $ctx->db->close();
     $worker = static function (): void {
         $child = mollieDiscoverableMandate(mollieOnboarding(mollieMariaContext(false)));
         $child->status = 'paid';
-        $child->payments->reverifyOnboarding($child->invoice->getId());
+        $child->paymentMandateId = 'mdt_bound';
+        $child->di['event_dispatcher']->addListener(Box\Mod\Invoice\Event\AfterAdminInvoicePaymentReceivedEvent::class, static function (): void { throw new RuntimeException('Cron must not dispatch payment events.'); });
+        $child->payments->retryPendingMandates();
         $child->db->close();
     };
     mollieMariaWorkers([$worker, $worker]);
@@ -632,7 +637,9 @@ test('MariaDB missing mandate IDs recover pending to valid with concurrent nativ
         ->and(mollieAttempt($check)['mandate_id'])->toBe('mdt_bound')
         ->and(mollieAttempt($check)['request'])->toBe($before['request'])
         ->and((int) $check->db->fetchOne("SELECT COUNT(*) FROM client_balance WHERE type = 'transaction'"))->toBe(1)
-        ->and((int) $check->db->fetchOne('SELECT COUNT(*) FROM molliepayments_attempt'))->toBe(1);
+        ->and((int) $check->db->fetchOne('SELECT COUNT(*) FROM molliepayments_attempt'))->toBe(1)
+        ->and((int) $check->db->fetchOne('SELECT COUNT(*) FROM ' . $check->db->quoteSingleIdentifier('transaction')))->toBe($transactionCount)
+        ->and($check->db->fetchAllAssociative('SELECT * FROM client_balance ORDER BY id'))->toBe($ledger);
 });
 
 test('MariaDB cron retry uses native named locking and preserves readiness during outage', function (): void {
@@ -654,4 +661,33 @@ test('MariaDB cron retry uses native named locking and preserves readiness durin
     expect($ctx->payments->reverifyOnboarding($ctx->invoice->getId())['status'])->toBe('ready')
         ->and(mollieAttempt($ctx)['mandate_verified_at'])->toBe($row['mandate_verified_at'])
         ->and((int) $ctx->db->fetchOne("SELECT COUNT(*) FROM client_balance WHERE type = 'transaction'"))->toBe(1);
+});
+
+test('MariaDB repeated cron reads add no transactions events or financial mutations and expire once', function (): void {
+    $ctx = mollieOnboarding(mollieMariaContext());
+    mollieFirst($ctx);
+    $ctx->status = 'paid';
+    $ctx->mandateStatus = 'pending';
+    mollieWebhook($ctx);
+    $row = mollieAttempt($ctx);
+    $table = $ctx->db->quoteSingleIdentifier('transaction');
+    $transactions = $ctx->db->fetchAllAssociative("SELECT * FROM {$table} ORDER BY id");
+    $ledger = $ctx->db->fetchAllAssociative('SELECT * FROM client_balance ORDER BY id');
+    $events = 0;
+    $ctx->di['event_dispatcher']->addListener(Box\Mod\Invoice\Event\AfterAdminInvoicePaymentReceivedEvent::class, static function () use (&$events): void { ++$events; });
+    for ($i = 0; $i < 3; ++$i) {
+        $ctx->db->update('molliepayments_attempt', ['updated_at' => Box\Mod\Molliepayments\Support\Timestamps::now(-360)], ['id' => $row['id']]);
+        expect($ctx->payments->retryPendingMandates())->toBe(1)
+            ->and($ctx->db->fetchAllAssociative("SELECT * FROM {$table} ORDER BY id"))->toBe($transactions)
+            ->and($ctx->db->fetchAllAssociative('SELECT * FROM client_balance ORDER BY id'))->toBe($ledger);
+    }
+    $ctx->db->update('molliepayments_attempt', ['created_at' => Box\Mod\Molliepayments\Support\Timestamps::now(-604800)], ['id' => $row['id']]);
+    $requests = count($ctx->requests);
+    expect($ctx->payments->retryPendingMandates())->toBe(1)
+        ->and(mollieAttempt($ctx)['onboarding_status'])->toBe('manual_review')
+        ->and($ctx->payments->retryPendingMandates())->toBe(0)
+        ->and(count($ctx->requests))->toBe($requests)->and($events)->toBe(0)
+        ->and($ctx->invoice->getStatus())->toBe('paid')
+        ->and($ctx->db->fetchAllAssociative("SELECT * FROM {$table} ORDER BY id"))->toBe($transactions)
+        ->and($ctx->db->fetchAllAssociative('SELECT * FROM client_balance ORDER BY id'))->toBe($ledger);
 });

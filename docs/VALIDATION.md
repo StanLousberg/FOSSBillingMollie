@@ -390,3 +390,30 @@ The new real browser validation used a new disposable client and native EUR 1.00
 The new invoice remains **unpaid**, with **0 attempts, 0 Customer mappings, 0 client ledger entries**. Consequently actual first-payment creation, Hosted Checkout completion, public webhook settlement and real mandate verification were **not executed** for this revision. Historical successful evidence is not counted as a new pass. Resolve the native session/public-deployment inconsistency and rerun the complete Test flow before unconditional merge approval. No Live payment was performed, no existing personal client/invoice/gateway record was edited, and only `molliepayments_test` was reset. The newly created disposable records are retained for audit.
 
 Module CSRF tests cover native optional-empty-cookie semantics, matching/nonmatching session nonces, JSON/header/form/legacy-cookie transport and native session regeneration. Mandate tests cover missing ID/link, exact instrument matching (never last-four), incomplete/ambiguous results, pending-to-valid and late appearance, 24-hour escalation, transient 429/5xx/SDK transport errors, explicit invalid/deleted mandates, Customer lease contention, stale-lease fencing, five-attempt cron bounds, cooldown and recovery after a failed payment GET. No renewal collection scheduler or new provider POST was added.
+
+## Final PR #18 corrections — 2026-11-07
+
+This section supersedes the earlier instrument-discovery/24-hour recovery expectations and claimed-transaction cron path. See [PR18_FINAL_FIXES.md](PR18_FINAL_FIXES.md) for findings, the explicit-association limitation and operator recovery. The starting local/remote PR head was `0892c05152cdaaec6e93a7c0c711db8479c4c94a`.
+
+Final verification on PHP 8.3.30 / Core `7bc90195a535a03d33b4d0db91f41ba6989dee8a` / private SDK v4.0.0:
+
+- Full module unit/SQLite suite: **556 tests, 4406 assertions, 0 failures**.
+- Full disposable MariaDB integration suite: **40 tests, 476 assertions, 0 failures**.
+- Included regressions: repeated cron runs with unchanged native transaction/ledger/invoice snapshots and zero payment events; no native `createAndProcess()` call; concurrent mandate cron workers; duplicate callbacks and concurrent financial workers; immutable requests/consent and all payment modes; overlapping same-Customer/same-IBAN or fingerprint first payments; missing/late/wrong/conflicting explicit mandate references; pending-to-valid/invalid/review; seven-day inclusive expiry and held leases; late recovery after expiry; temporary provider outages and historical readiness preservation.
+- PHP syntax: **58 own PHP files**, no errors, vendor excluded.
+- Full uncached PHP-CS-Fixer: **58 files**, final dry run found **0 files** to fix, exit 0. The missing trailing comma identified by Actions run 42408055915 was corrected.
+- `composer validate --strict --no-check-publish`: passed, no dependency change.
+- `git diff --check`: passed.
+
+Commands from the external FOSSBilling test-host root:
+
+```bash
+ddev exec ./src/vendor/bin/pest --test-directory=../tests --configuration=phpunit.xml.dist src/modules/Molliepayments/tests/Unit
+ddev exec env MOLLIEPAYMENTS_MYSQL_URL=mysql://db:db@db:3306/molliepayments_test ./src/vendor/bin/pest --test-directory=../tests --configuration=phpunit.xml.dist src/modules/Molliepayments/tests/Integration
+ddev exec ./src/vendor/bin/php-cs-fixer fix --config=.local/MolliePayments/.php-cs-fixer.php --using-cache=no --sequential
+ddev exec ./src/vendor/bin/php-cs-fixer fix --config=.local/MolliePayments/.php-cs-fixer.php --using-cache=no --dry-run --diff --sequential
+ddev exec composer validate --strict --no-check-publish --working-dir=.local/MolliePayments
+ddev exec bash -lc 'find .local/MolliePayments/gateway .local/MolliePayments/module -path "*/vendor" -prune -o -name "*.php" -print0 | xargs -0 -n 1 php -l'
+```
+
+Only disposable fixtures/the designated `molliepayments_test` database were reset; no saved personal development records or credentials were modified. Provider traffic in these tests is faked. No new real Test/Live payment or browser E2E was performed. Browser E2E is explicitly excluded from this correction round because of the known upstream Core CSRF issue, and no workaround or session change is introduced. It remains a production-validation limitation, not a blocker for the next technical review of these scoped corrections. Core, vendor, cart integration, UI styling and financial settlement/webhook implementations are unchanged. Automatic recurring collection remains disabled.

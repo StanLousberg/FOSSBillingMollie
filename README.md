@@ -43,4 +43,4 @@ This unofficial project is not affiliated with or endorsed by Mollie B.V. or FOS
 
 Source code is licensed under [Apache-2.0](LICENSE). Mollie's original logo and trademarks are separate from that license; see [BRANDING.md](docs/BRANDING.md).
 
-Pending mandate verification uses bounded, provider-read-only native cron checks. See the [PR #18 hardening findings and remaining browser/session blocker](docs/PR18_HARDENING_REVIEW.md); automatic collection remains disabled.
+Pending mandate verification uses bounded native cron checks without new transactions or accounting changes. Readiness requires an explicit provider payment/mandate relation; expired pending records require manual review. See the [PR #18 final corrections and validation limits](docs/PR18_FINAL_FIXES.md); automatic collection remains disabled.

@@ -1,5 +1,7 @@
 # PR #18 final hardening review — 2026-11-07
 
+> Historical report for commit `0892c05152cdaaec6e93a7c0c711db8479c4c94a`. The instrument-based discovery and cron transaction path described here are superseded by [the final corrections](PR18_FINAL_FIXES.md). Use that report for current behavior and review readiness.
+
 ## Reference and scope
 
 Local and remote PR #18 initially matched `294de042114b342b8da320885efd54221bcc7fdd`. Work stays on `8-implement-first-payments-and-mandate-onboarding`; no branch, PR or push is created. Installed Core and the pinned CI target are `7bc90195a535a03d33b4d0db91f41ba6989dee8a`; a read-only remote check found upstream `main` at that exact same SHA. Thus the two current CI matrix labels reference identical source, rather than two distinct revisions. The installed private SDK is `mollie/mollie-api-php v4.0.0`.

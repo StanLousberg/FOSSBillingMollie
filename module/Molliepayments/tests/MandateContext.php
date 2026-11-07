@@ -12,16 +12,18 @@ require_once __DIR__ . '/OnboardingContext.php';
 function mollieDiscoverableMandate(object $ctx, string $method = 'ideal'): object
 {
     $ctx->mandateId = null;
+    $ctx->paymentMandateId = null;
     $expected = match ($method) {
-        'creditcard' => 'creditcard', 'paypal' => 'paypal', default => 'directdebit'
+        'creditcard' => 'creditcard', 'paypal' => 'paypal', default => 'directdebit',
     };
     $details = match ($expected) {
         'creditcard' => ['cardFingerprint' => 'disposable-test-fingerprint'],
         'paypal' => ['consumerAccount' => 'disposable@example.invalid'],
         default => ['consumerAccount' => 'NL00TEST0000000000'],
     };
-    $ctx->mutatePayment = static function (array $payment) use ($method, $details): array {
+    $ctx->mutatePayment = static function (array $payment) use ($ctx, $method, $details): array {
         $payment['method'] = $method;
+        $payment['mandateId'] = $ctx->paymentMandateId;
         $payment['createdAt'] = gmdate(DATE_ATOM, time() - 120);
         $payment['details'] = $details;
 
@@ -56,4 +58,19 @@ function mollieDiscoverableMandate(object $ctx, string $method = 'ideal'): objec
     });
 
     return $ctx;
+}
+
+/** Another native invoice for the same recurring order, with no financial fixture shortcuts. */
+function mollieAdditionalRecurringInvoice(object $ctx): void
+{
+    $invoice = new Box\Mod\Invoice\Entity\Invoice();
+    $invoice->setClientId($ctx->client->getId())->setCurrency('EUR')->setIssued(true)->setHash(bin2hex(random_bytes(20)))->setTaxrate(0);
+    $ctx->em->persist($invoice);
+    $ctx->em->flush();
+    $item = new Box\Mod\Invoice\Entity\InvoiceItem();
+    $item->setInvoice($invoice)->setTitle('Disposable overlapping first payment')->setType('order')->setRelId((string) $ctx->order->getId())->setPeriod('1M')->setQuantity(1)->setPrice('12.34');
+    $ctx->em->persist($item);
+    $ctx->em->flush();
+    $ctx->invoice = $invoice;
+    $ctx->item = $item;
 }

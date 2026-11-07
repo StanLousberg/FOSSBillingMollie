@@ -272,12 +272,24 @@ final class PaymentService
         if ($attempt['payment_id'] === null) {
             throw new \Payment_Exception('Payment creation is unresolved. Operator recovery is required.');
         }
-        $this->reconcile($id, $attempt['payment_id']);
+        if ($attempt['status'] === 'paid' && $attempt['settled_transaction_id'] !== null) {
+            $lease = bin2hex(random_bytes(16));
+            if ($this->attempts->acquire($id, $lease)) {
+                try {
+                    $this->verifySettledMandate($this->attempts->find($id), $lease);
+                } finally {
+                    $this->attempts->release($id, $lease);
+                }
+            }
+        } else {
+            // Unsettled payments still require the existing native financial recovery path.
+            $this->reconcile($id, $attempt['payment_id']);
+        }
 
         return $this->onboarding($invoiceId);
     }
 
-    /** Bounded native-cron recovery: authenticated GET/reconciliation only, never checkout. */
+    /** Bounded native-cron mandate reads; never enter native transaction processing. */
     public function retryPendingMandates(): int
     {
         $db = $this->attempts->connection;
@@ -287,17 +299,39 @@ final class PaymentService
         }
         $count = 0;
         try {
-            $rows = $db->fetchAllAssociative("SELECT id, payment_id FROM molliepayments_attempt WHERE status = 'paid' AND onboarding_status = 'pending_mandate' AND settled_transaction_id IS NOT NULL AND payment_id IS NOT NULL AND updated_at < ? AND created_at >= ? AND (lease IS NULL OR lease_until < ?) ORDER BY updated_at, id LIMIT 5", [Support\Timestamps::now(-300), Support\Timestamps::now(-604800), Support\Timestamps::now()]);
+            $now = Support\Timestamps::now();
+            $deadline = Support\Timestamps::now(-604800);
+            $rows = $db->fetchAllAssociative("SELECT id FROM molliepayments_attempt WHERE status = 'paid' AND onboarding_status = 'pending_mandate' AND consent_version IS NOT NULL AND settled_transaction_id IS NOT NULL AND payment_id IS NOT NULL AND (created_at <= ? OR updated_at < ?) AND (lease IS NULL OR lease_until < ?) ORDER BY created_at, updated_at, id LIMIT 5", [$deadline, Support\Timestamps::now(-300), $now]);
             foreach ($rows as $row) {
-                // Back off even if payment retrieval fails before mandate verification.
-                if ($db->executeStatement('UPDATE molliepayments_attempt SET updated_at = ? WHERE id = ? AND (lease IS NULL OR lease_until < ?)', [Support\Timestamps::now(), $row['id'], Support\Timestamps::now()]) !== 1) {
+                $lease = bin2hex(random_bytes(16));
+                if (!$this->attempts->acquire($row['id'], $lease)) {
                     continue;
                 }
-                ++$count;
                 try {
-                    $this->reconcile($row['id'], $row['payment_id']);
+                    $attempt = $this->attempts->find($row['id']);
+                    if ($attempt['onboarding_status'] !== 'pending_mandate' || $attempt['status'] !== 'paid' || $attempt['settled_transaction_id'] === null) {
+                        continue;
+                    }
+                    ++$count;
+                    if ($attempt['created_at'] <= $deadline) {
+                        $changed = $db->executeStatement("UPDATE molliepayments_attempt SET onboarding_status = 'manual_review', mandate_verified_at = NULL, updated_at = ? WHERE id = ? AND lease = ? AND onboarding_status = 'pending_mandate'", [$now, $attempt['id'], $lease]);
+                        if ($changed === 1) {
+                            $this->di['logger']->warning('MolliePayments mandate recovery expired; attempt {attempt_id}.', ['attempt_id' => $attempt['id']]);
+                        }
+                        continue;
+                    }
+                    // Back off even when the authenticated payment GET cannot complete.
+                    $db->update(AttemptRepository::TABLE, ['updated_at' => $now], ['id' => $attempt['id'], 'lease' => $lease]);
+                    $this->verifySettledMandate($attempt, $lease);
+                } catch (\Payment_Exception $error) {
+                    if ($error->getCode() !== 503) {
+                        $db->executeStatement("UPDATE molliepayments_attempt SET onboarding_status = 'manual_review', mandate_verified_at = NULL WHERE id = ? AND lease = ? AND onboarding_status = 'pending_mandate'", [$row['id'], $lease]);
+                    }
+                    $this->di['logger']->warning('MolliePayments mandate recovery deferred or requires review; attempt {attempt_id}.', ['attempt_id' => $row['id']]);
                 } catch (\Throwable) {
                     $this->di['logger']->warning('MolliePayments mandate recovery unavailable; attempt {attempt_id}.', ['attempt_id' => $row['id']]);
+                } finally {
+                    $this->attempts->release($row['id'], $lease);
                 }
             }
         } finally {
@@ -305,6 +339,40 @@ final class PaymentService
         }
 
         return $count;
+    }
+
+    /** Verify an existing successful native settlement, then read the provider; no accounting writes. */
+    private function verifySettledMandate(array $attempt, string $lease): void
+    {
+        $transaction = $this->di['em']->find(Transaction::class, (int) $attempt['settled_transaction_id']);
+        if ($transaction !== null) {
+            $this->di['em']->refresh($transaction);
+        }
+        $invoice = $transaction?->getInvoice();
+        if ($invoice instanceof Invoice) {
+            $this->di['em']->refresh($invoice);
+        }
+        if (!$transaction instanceof Transaction || !$invoice instanceof Invoice
+            || $invoice->getStatus() !== Invoice::STATUS_PAID || (int) $invoice->getClientId() !== (int) $attempt['client_id']
+            || $invoice->getCurrency() !== $attempt['currency']
+            || $transaction->getStatus() !== Transaction::STATUS_PROCESSED
+            || $transaction->getTxnStatus() !== 'paid' || $transaction->getType() !== \Payment_Transaction::TXTYPE_PAYMENT
+            || $transaction->getTxnId() !== $attempt['payment_id']
+            || (int) $transaction->getInvoice()?->getId() !== (int) $attempt['invoice_id']
+            || (int) $transaction->getGateway()?->getId() !== (int) $attempt['gateway_id']
+            || $transaction->getCurrency() !== $attempt['currency']
+            || Amount::minor((string) $transaction->getAmount()) !== Amount::minor($attempt['amount'])) {
+            throw new \Payment_Exception('Mandate recovery requires the original successful native transaction.', [], 409);
+        }
+        [, $environment, $key] = $this->gateway((int) $attempt['gateway_id']);
+        if ($environment !== $attempt['environment'] || !hash_equals($attempt['credential_fingerprint'], hash_hmac('sha256', $attempt['id'], $key))) {
+            throw new \Payment_Exception('Mandate recovery credential context changed.', [], 409);
+        }
+        $payment = $this->fetchPayment($attempt['payment_id'], $key);
+        if ($this->validatePayment($attempt, $payment) !== 'paid') {
+            throw new \Payment_Exception('Mandate recovery requires an authenticated paid payment.', [], 409);
+        }
+        (new MandateService($this->di, $this->clientFactory))->verify($attempt['id'], $payment, $lease);
     }
 
     private function ownedInvoice(int $invoiceId): Invoice
