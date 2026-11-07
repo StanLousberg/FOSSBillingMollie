@@ -143,10 +143,22 @@ test('client template renders native filters CSRF and an unchecked explicit cons
     $document = new DOMDocument();
     @$document->loadHTML($html);
     $xpath = new DOMXPath($document);
-    expect($xpath->query('//input[@type="checkbox" and @name="consent" and not(@checked) and @required]')->length)->toBe(1)
+    expect($xpath->query('//input[@type="checkbox" and @name="consent" and not(@checked) and @required and @form="molliepayments-onboarding"]')->length)->toBe(1)
+        ->and($xpath->query('//label[@for="molliepayments-consent"]')->length)->toBe(1)
         ->and($xpath->query('//style | //*[@style] | //link[@rel="stylesheet"]')->length)->toBe(0)
-        ->and($html)->toContain('col-12 col-lg-9 col-xl-8', 'form-check-input', 'role="status"', 'aria-live="polite"', 'buttons.forEach', 'if (busy) return', 'Recurring service', '12.34 EUR')
-        ->and($html)->toContain('/api/client/molliepayments/onboarding_start', '/api/client/molliepayments/onboarding_verify', '/api/client/molliepayments/checkout', 'Pay once without future authorization', 'disposable-nonce', 'actual renewal invoices', '/invoice/disposable');
+        ->and($xpath->evaluate('normalize-space(//dl/dd[last()])'))->toBe('12.34 EUR including tax')
+        ->and($xpath->evaluate('normalize-space(//form[@id="molliepayments-oneoff"]//button)'))->toBe('Pay once')
+        ->and($xpath->evaluate('normalize-space(//form[@id="molliepayments-onboarding"]//button)'))->toBe('Authorize and pay')
+        ->and($html)->toContain('form-check-input', 'role="status"', 'aria-live="polite"', 'buttons.forEach', 'if (busy) return', 'Recurring service', '/invoice/disposable');
+    foreach (['onboarding' => 'onboarding_start', 'oneoff' => 'checkout', 'verify' => 'onboarding_verify'] as $id => $action) {
+        $form = '//form[@id="molliepayments-' . $id . '" and @method="post"]';
+        expect($xpath->query($form)->length)->toBe(1)
+            ->and($xpath->evaluate('string(' . $form . '/@action)'))->toBe(Tests\Helpers\container()['url']->link('api/client/molliepayments/' . $action))
+            ->and($xpath->query($form . '/input[@name="CSRFToken" and @value="disposable-nonce"]')->length)->toBe(1)
+            ->and($xpath->query($form . '/input[@name="invoice_id" and @value="1"]')->length)->toBe(1);
+    }
+    expect($xpath->query('//form[@id="molliepayments-onboarding"]/input[@name="consent_digest" and @value="disposable-digest"]')->length)->toBe(1)
+        ->and($xpath->query('//form[@id="molliepayments-onboarding"]/input[@name="consent_version" and @value="' . PaymentService::CONSENT_VERSION . '"]')->length)->toBe(1);
 });
 
 test('client template fallback supports symlinked installations and native theme precedence', function (): void {
@@ -193,17 +205,18 @@ test('client UI translates payment states and only offers appropriate actions', 
     $document = new DOMDocument();
     @$document->loadHTML($html);
     $xpath = new DOMXPath($document);
-    expect($html)->toContain($message)->not->toContain('Onboarding status:', '>pending_mandate<', '>manual_review<')
+    expect($xpath->evaluate('normalize-space(//div[@role="status"])'))->toBe($message)
+        ->and($html)->not->toContain('Onboarding status:', '>pending_mandate<', '>manual_review<')
         ->and($xpath->query('//form[@id="molliepayments-onboarding"]')->length)->toBe($pay ? 1 : 0)
         ->and($xpath->query('//form[@id="molliepayments-oneoff"]')->length)->toBe($pay ? 1 : 0);
 })->with([
-    ['pending_payment', false, 'first payment has already started'],
-    ['paid', false, 'No further payment is needed'],
-    ['ready', false, 'suitable mandate has been verified'],
-    ['pending_mandate', false, 'still checking'],
-    ['payment_failed', true, 'choose how to try again'],
-    ['manual_review', false, 'support review'],
-    ['mandate_invalid', false, 'mandate is not valid'],
+    ['pending_payment', false, 'A payment has already started. Please check the existing payment before continuing.'],
+    ['paid', false, 'This invoice has been paid. No further payment is needed.'],
+    ['ready', false, 'Your payment and authorization have been verified.'],
+    ['pending_mandate', false, 'Your payment is complete. We are verifying your payment authorization.'],
+    ['payment_failed', true, 'Your previous payment was unsuccessful. You can try again.'],
+    ['manual_review', false, 'This payment requires review. Please contact support before trying again.'],
+    ['mandate_invalid', false, 'Your payment is complete, but authorization could not be verified. Please contact support.'],
 ]);
 
 test('authorization page retrieves the native company name and escapes it in consent and copy', function (): void {
@@ -230,7 +243,10 @@ test('renewal summary uses native quantity and renewal discounts independently o
         ->and($page['period_title'])->toBe((new FOSSBilling\Core\Period($period))->getTitle())
         ->and($ctx->requests)->toBeEmpty()->and($ctx->customerRequests)->toBeEmpty()
         ->and($ctx->db->fetchOne('SELECT COUNT(*) FROM molliepayments_attempt'))->toBe(0);
-    expect(mollieRenderOnboarding($page))->toContain('75.00 EUR', '24.20 EUR', 'excluding tax', 'including tax');
+    $document = new DOMDocument();
+    @$document->loadHTML(mollieRenderOnboarding($page));
+    $xpath = new DOMXPath($document);
+    expect($xpath->evaluate('normalize-space(//dl/dd[last()])'))->toBe('24.20 EUR including tax');
 })->with(['1M', '3M', '1Y', '2Y']);
 
 test('renewal summary respects native renewal line overrides instead of initial order price', function (): void {
@@ -246,12 +262,14 @@ test('authorization markup stacks details on small screens and keeps only essent
     $document = new DOMDocument();
     @$document->loadHTML($html);
     $xpath = new DOMXPath($document);
-    expect($xpath->query('//dl[contains(@class,"row")]/dt[contains(@class,"col-sm-4")]')->length)->toBe(5)
-        ->and($xpath->query('//dl/dd[contains(@class,"col-sm-8")]')->length)->toBe(5)
+    expect($xpath->query('//dl[contains(@class,"row")]/dt[contains(@class,"col-sm-4")]')->length)->toBe(3)
+        ->and($xpath->query('//dl/dd[contains(@class,"col-sm-8")]')->length)->toBe(3)
         ->and($xpath->query('//*[contains(concat(" ",normalize-space(@class)," ")," alert ")]')->length)->toBe(0)
         ->and($xpath->query('//ol | //style | //*[@style]')->length)->toBe(0)
         ->and($html)->not->toContain('justify-content-center', 'text-center', 'How authorization works')
-        ->and(substr_count($html, 'Automatic recurring collection is not yet enabled'))->toBe(1);
+        ->and($xpath->query('//div[contains(@class,"col-12") and contains(@class,"col-md-6")]/form')->length)->toBe(2)
+        ->and($xpath->query('//form[@id="molliepayments-oneoff"]//button[contains(@class,"btn-outline-secondary")]')->length)->toBe(1)
+        ->and($xpath->query('//form[@id="molliepayments-onboarding"]//button[contains(@class,"btn-primary")]')->length)->toBe(1);
 });
 
 test('rendered actions follow actual persisted payment state', function (string $state, bool $pay, bool $resume, bool $verify): void {
