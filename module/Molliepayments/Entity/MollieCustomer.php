@@ -4,6 +4,7 @@ declare(strict_types=1);
 
 namespace Box\Mod\Molliepayments\Entity;
 
+use Doctrine\DBAL\Types\Types;
 use Doctrine\ORM\Mapping as ORM;
 
 /** Provider mapping with an encrypted immutable creation snapshot; no plaintext personal fields. */
@@ -45,17 +46,17 @@ class MollieCustomer
     #[ORM\Column(type: 'text')]
     public string $request;
 
-    #[ORM\Column(type: 'integer')]
-    public int $createdAt;
+    #[ORM\Column(type: Types::DATETIME_IMMUTABLE)]
+    public \DateTimeImmutable $createdAt;
 
-    #[ORM\Column(type: 'integer')]
-    public int $updatedAt;
+    #[ORM\Column(type: Types::DATETIME_IMMUTABLE)]
+    public \DateTimeImmutable $updatedAt;
 
     #[ORM\Column(length: 32, nullable: true)]
     public ?string $lease = null;
 
-    #[ORM\Column(type: 'integer')]
-    public int $leaseUntil = 0;
+    #[ORM\Column(type: Types::DATETIME_IMMUTABLE, nullable: true)]
+    public ?\DateTimeImmutable $leaseUntil = null;
 
     #[ORM\Column(length: 32, nullable: true)]
     public ?string $error = null;

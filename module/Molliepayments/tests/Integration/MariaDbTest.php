@@ -306,7 +306,7 @@ test('MariaDB customer repeated verification and expired creation recovery never
     $ctx->customerResponses[Mollie\Api\Http\Requests\CreateCustomerRequest::class] = new Mollie\Api\Fake\MockResponse([], 500);
     expect(fn () => mollieResolveCustomer($ctx))->toThrow(Payment_Exception::class);
     $row = mollieCustomerRow($ctx);
-    $ctx->db->update('molliepayments_customer', ['created_at' => time() - 2700], ['id' => $row['id']]);
+    $ctx->db->update('molliepayments_customer', ['created_at' => Box\Mod\Molliepayments\Support\Timestamps::now(-2700)], ['id' => $row['id']]);
     expect(fn () => mollieResolveCustomer($ctx))->toThrow(Payment_Exception::class);
     expect($ctx->customers->recover($ctx->client->getId(), $ctx->gateway->getId(), $row['id'], 'cst_disposable'))->toBe('cst_disposable')
         ->and(mollieResolveCustomer($ctx, false, true))->toBe('cst_disposable')
@@ -496,7 +496,7 @@ test('MariaDB orphan callback workers attach verified invoices and settle once',
         ->and($check->invoice->getStatus())->toBe('paid');
 })->with([true, false]);
 
-test('MariaDB epochs and native DATETIME do not inherit database session offsets', function (string $zone): void {
+test('MariaDB module DATETIME and native timestamps do not inherit database session offsets', function (string $zone): void {
     $previous = date_default_timezone_get();
     try {
         date_default_timezone_set($zone);
@@ -511,8 +511,10 @@ test('MariaDB epochs and native DATETIME do not inherit database session offsets
         $raw = $ctx->db->fetchOne("SELECT updated_at FROM {$table} WHERE id = ?", [$tx->getId()]);
         expect($raw)->toBe($tx->getUpdatedAt()->format('Y-m-d H:i:s'))
             ->and($tx->getUpdatedAt()->getTimezone()->getName())->toBe($zone);
-        foreach ([mollieAttempt($ctx)['created_at'], mollieCustomerRow($ctx)['created_at'], mollieAttempt($ctx)['consent_accepted_at'], mollieAttempt($ctx)['mandate_verified_at']] as $epoch) {
-            expect((int) $epoch)->toBeGreaterThanOrEqual(time() - 15)->toBeLessThanOrEqual(time());
+        foreach ([mollieAttempt($ctx)['created_at'], mollieCustomerRow($ctx)['created_at'], mollieAttempt($ctx)['consent_accepted_at'], mollieAttempt($ctx)['mandate_verified_at']] as $timestamp) {
+            expect($timestamp)->toMatch('/^\d{4}-\d{2}-\d{2} \d{2}:\d{2}:\d{2}$/')
+                ->and(Box\Mod\Molliepayments\Support\Timestamps::expired($timestamp, 15))->toBeFalse()
+                ->and($timestamp <= Box\Mod\Molliepayments\Support\Timestamps::now())->toBeTrue();
         }
         $ctx->db->close();
     } finally {

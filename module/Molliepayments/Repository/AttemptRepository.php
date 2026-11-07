@@ -4,6 +4,7 @@ declare(strict_types=1);
 
 namespace Box\Mod\Molliepayments\Repository;
 
+use Box\Mod\Molliepayments\Support\Timestamps;
 use Doctrine\DBAL\Connection;
 use Doctrine\DBAL\Exception\UniqueConstraintViolationException;
 
@@ -46,20 +47,20 @@ final class AttemptRepository
 
     public function update(string $id, array $changes): void
     {
-        $this->connection->update(self::TABLE, $changes + ['updated_at' => time()], ['id' => $id]);
+        $this->connection->update(self::TABLE, $changes + ['updated_at' => Timestamps::now()], ['id' => $id]);
     }
 
     public function acquire(string $id, string $lease): bool
     {
         return $this->connection->executeStatement(
             'UPDATE molliepayments_attempt SET lease = ?, lease_until = ? WHERE id = ? AND (lease IS NULL OR lease_until < ?)',
-            [$lease, time() + 180, $id, time()]
+            [$lease, Timestamps::now(180), $id, Timestamps::now()]
         ) === 1;
     }
 
     public function release(string $id, string $lease): void
     {
-        $this->connection->executeStatement('UPDATE molliepayments_attempt SET lease = NULL, lease_until = 0 WHERE id = ? AND lease = ?', [$id, $lease]);
+        $this->connection->executeStatement('UPDATE molliepayments_attempt SET lease = NULL, lease_until = NULL WHERE id = ? AND lease = ?', [$id, $lease]);
     }
 
     /** Caller holds the invoice lock first, keeping a consistent lock order. */

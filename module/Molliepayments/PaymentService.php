@@ -285,7 +285,7 @@ final class PaymentService
             $attempt = $this->attempts->find($attempt['id']);
             if ($attempt['payment_id'] === null) {
                 $this->assertInvoiceMatches($invoice, $attempt);
-                if (time() - (int) $attempt['created_at'] >= 2700
+                if (Support\Timestamps::expired($attempt['created_at'], 2700)
                     || !hash_equals($attempt['credential_fingerprint'], hash_hmac('sha256', $attempt['id'], $key))) {
                     $this->attempts->update($attempt['id'], ['error' => 'creation_requires_reconciliation']);
                     throw new \Payment_Exception('Unresolved Mollie payment creation. Reconcile the saved attempt with Mollie before retrying.');
@@ -383,7 +383,7 @@ final class PaymentService
                 $scope = $this->recurringScope($invoice);
                 $payload['metadata'] += ['order_id' => $scope['order_id'], 'order_period' => $scope['period'], 'customer_mapping' => $customer['id'], 'profile_id' => $customer['profile_id'], 'consent_version' => self::CONSENT_VERSION];
                 $consent = ['consent_version' => self::CONSENT_VERSION, 'consent_text' => $this->consentText($scope),
-                    'consent_accepted_at' => time(), 'onboarding_status' => 'pending_payment'];
+                    'consent_accepted_at' => Support\Timestamps::now(), 'onboarding_status' => 'pending_payment'];
             }
 
             return $this->attempts->reserve($consent + [
@@ -393,7 +393,7 @@ final class PaymentService
                 'status' => 'creating', 'idempotency_key' => $id,
                 'credential_fingerprint' => hash_hmac('sha256', $id, $key),
                 'request' => json_encode($payload, JSON_THROW_ON_ERROR),
-                'created_at' => time(), 'updated_at' => time(), 'lease_until' => 0,
+                'created_at' => Support\Timestamps::now(), 'updated_at' => Support\Timestamps::now(), 'lease_until' => null,
             ]);
         });
     }

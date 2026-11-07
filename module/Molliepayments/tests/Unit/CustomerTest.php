@@ -60,7 +60,7 @@ test('customer unresolved creation cannot replay after the conservative idempote
     $ctx->customerResponses[CreateCustomerRequest::class] = new MockResponse([], 500);
     expect(fn () => mollieResolveCustomer($ctx))->toThrow(Payment_Exception::class);
     $row = mollieCustomerRow($ctx);
-    $ctx->db->update(CustomerRepository::TABLE, ['created_at' => time() - 2700], ['id' => $row['id']]);
+    $ctx->db->update(CustomerRepository::TABLE, ['created_at' => Box\Mod\Molliepayments\Support\Timestamps::now(-2700)], ['id' => $row['id']]);
     $before = count($ctx->customerRequests);
     expect(fn () => mollieResolveCustomer($ctx))->toThrow(Payment_Exception::class)
         ->and(count($ctx->customerRequests))->toBe($before + 1);
@@ -223,7 +223,7 @@ test('customer expired worker lease can retry without changing creation identity
     $ctx->customerResponses[CreateCustomerRequest::class] = new MockResponse([], 500);
     expect(fn () => mollieResolveCustomer($ctx))->toThrow(Payment_Exception::class);
     $row = mollieCustomerRow($ctx);
-    $ctx->db->update(CustomerRepository::TABLE, ['lease' => 'crashed-worker', 'lease_until' => time() - 1], ['id' => $row['id']]);
+    $ctx->db->update(CustomerRepository::TABLE, ['lease' => 'crashed-worker', 'lease_until' => Box\Mod\Molliepayments\Support\Timestamps::now(-1)], ['id' => $row['id']]);
     $ctx->customerResponses[CreateCustomerRequest::class] = $response;
     expect(mollieResolveCustomer($ctx))->toBe('cst_disposable')
         ->and(mollieCustomerRow($ctx)['idempotency_key'])->toBe($row['idempotency_key']);
@@ -255,7 +255,7 @@ test('customer expired creation retains its specific recovery diagnostic', funct
     $ctx->customerResponses[CreateCustomerRequest::class] = new MockResponse([], 500);
     expect(fn () => mollieResolveCustomer($ctx))->toThrow(Payment_Exception::class);
     $row = mollieCustomerRow($ctx);
-    $ctx->db->update(CustomerRepository::TABLE, ['created_at' => time() - 2700], ['id' => $row['id']]);
+    $ctx->db->update(CustomerRepository::TABLE, ['created_at' => Box\Mod\Molliepayments\Support\Timestamps::now(-2700)], ['id' => $row['id']]);
     foreach ([1, 2] as $retry) {
         expect(fn () => mollieResolveCustomer($ctx))->toThrow(Payment_Exception::class, 'requires operator recovery')
             ->and(mollieCustomerRow($ctx)['error'])->toBe('recovery_required')

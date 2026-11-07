@@ -196,7 +196,7 @@ test('CLI reconciliation recovers a missing provider ID through native claims', 
     $ctx = molliePaymentContext();
     $ctx->payments->checkout($ctx->invoice->getId(), $ctx->gateway->getId());
     $attempt = mollieAttempt($ctx);
-    $ctx->db->update('molliepayments_attempt', ['payment_id' => null, 'status' => 'creating', 'created_at' => time() - 3601], ['id' => $attempt['id']]);
+    $ctx->db->update('molliepayments_attempt', ['payment_id' => null, 'status' => 'creating', 'created_at' => Box\Mod\Molliepayments\Support\Timestamps::now(-3601)], ['id' => $attempt['id']]);
     $ctx->status = 'paid';
     $id = $ctx->payments->reconcile($attempt['id'], 'tr_disposable123');
     expect($id)->toBeGreaterThan(0)->and($ctx->invoice->getStatus())->toBe(Invoice::STATUS_PAID)

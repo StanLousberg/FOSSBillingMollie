@@ -122,7 +122,7 @@ final class MandateService
             foreach ($scoped as $candidate) {
                 if ($candidate->id === $mandate->id && $candidate->mode === $attempt['environment'] && $candidate->isValid() && $candidate->method === $expected) {
                     $changes['onboarding_status'] = 'ready';
-                    $changes['mandate_verified_at'] = time();
+                    $changes['mandate_verified_at'] = Support\Timestamps::now();
 
                     return;
                 }
@@ -132,7 +132,7 @@ final class MandateService
             // A paid invoice remains settled. No raw provider errors or instrument data are retained.
             $changes['onboarding_status'] = 'pending_mandate';
         } finally {
-            $attempts->connection->update(AttemptRepository::TABLE, $changes + ['updated_at' => time()], ['id' => $attemptId, 'lease' => $lease]);
+            $attempts->connection->update(AttemptRepository::TABLE, $changes + ['updated_at' => Support\Timestamps::now()], ['id' => $attemptId, 'lease' => $lease]);
             $attempts->release($attemptId, $lease);
         }
     }

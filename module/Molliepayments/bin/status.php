@@ -23,7 +23,7 @@ try {
     );
     foreach ($rows as &$row) {
         foreach (['created_at', 'updated_at', 'consent_accepted_at', 'mandate_verified_at', 'lease_until'] as $field) {
-            $row[$field . '_local'] = Box\Mod\Molliepayments\Support\Timestamps::present($row[$field] === null ? null : (int) $row[$field]);
+            $row[$field . '_local'] = Box\Mod\Molliepayments\Support\Timestamps::present($row[$field]);
         }
     }
     unset($row);

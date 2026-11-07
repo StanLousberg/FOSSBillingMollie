@@ -110,7 +110,7 @@ final class CustomerService
                 'profile_id' => $profile->id, 'customer_id' => null, 'status' => 'creating',
                 'idempotency_key' => $id, 'credential_fingerprint' => hash_hmac('sha256', $id, $key),
                 'request' => Support\CustomerRequest::snapshot($nativeClient, $id, $this->di['crypt']),
-                'created_at' => time(), 'updated_at' => time(), 'lease' => null, 'lease_until' => 0, 'error' => null,
+                'created_at' => Support\Timestamps::now(), 'updated_at' => Support\Timestamps::now(), 'lease' => null, 'lease_until' => null, 'error' => null,
             ]);
         }
         $this->assertCredential($row, $key);
@@ -132,7 +132,7 @@ final class CustomerService
                 if (!$create) {
                     throw new \Payment_Exception('Customer creation requires an explicit request.');
                 }
-                if (time() - (int) $row['created_at'] >= 2700) {
+                if (Support\Timestamps::expired($row['created_at'], 2700)) {
                     $this->customers->update($row['id'], $lease, ['error' => 'recovery_required']);
                     throw new \Payment_Exception('Unresolved Customer creation requires operator recovery.');
                 }

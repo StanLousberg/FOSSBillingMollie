@@ -4,6 +4,7 @@ declare(strict_types=1);
 
 namespace Box\Mod\Molliepayments\Repository;
 
+use Box\Mod\Molliepayments\Support\Timestamps;
 use Doctrine\DBAL\Connection;
 use Doctrine\DBAL\Exception\UniqueConstraintViolationException;
 
@@ -40,14 +41,14 @@ final class CustomerRepository
     {
         return $this->connection->executeStatement(
             'UPDATE molliepayments_customer SET lease = ?, lease_until = ? WHERE id = ? AND (lease IS NULL OR lease_until < ?)',
-            [$lease, time() + 180, $id, time()]
+            [$lease, Timestamps::now(180), $id, Timestamps::now()]
         ) === 1;
     }
 
     /** Fence late workers: a response cannot overwrite a newer worker or recovery. */
     public function update(string $id, string $lease, array $changes): void
     {
-        $changed = $this->connection->update(self::TABLE, $changes + ['updated_at' => time()], ['id' => $id, 'lease' => $lease]);
+        $changed = $this->connection->update(self::TABLE, $changes + ['updated_at' => Timestamps::now()], ['id' => $id, 'lease' => $lease]);
         // MySQL reports zero changed rows for repeated verification in the same second.
         // Distinguish that harmless no-op from losing ownership of the fenced row.
         if ($changed === 0 && $this->connection->fetchOne('SELECT id FROM molliepayments_customer WHERE id = ? AND lease = ?', [$id, $lease]) !== $id) {
@@ -57,6 +58,6 @@ final class CustomerRepository
 
     public function release(string $id, string $lease): void
     {
-        $this->connection->executeStatement('UPDATE molliepayments_customer SET lease = NULL, lease_until = 0 WHERE id = ? AND lease = ?', [$id, $lease]);
+        $this->connection->executeStatement('UPDATE molliepayments_customer SET lease = NULL, lease_until = NULL WHERE id = ? AND lease = ?', [$id, $lease]);
     }
 }

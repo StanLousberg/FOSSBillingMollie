@@ -112,7 +112,7 @@ test('unresolved creations stop before idempotency expiry or credential rotation
     $ctx->payments->checkout($ctx->invoice->getId(), $ctx->gateway->getId());
     $attempt = mollieAttempt($ctx);
     $changes = ['payment_id' => null, 'status' => 'creating'];
-    $changes[$rotation ? 'credential_fingerprint' : 'created_at'] = $rotation ? str_repeat('0', 64) : time() - 2701;
+    $changes[$rotation ? 'credential_fingerprint' : 'created_at'] = $rotation ? str_repeat('0', 64) : Box\Mod\Molliepayments\Support\Timestamps::now(-2701);
     $ctx->db->update('molliepayments_attempt', $changes, ['id' => $attempt['id']]);
     expect(fn () => $ctx->payments->checkout($ctx->invoice->getId(), $ctx->gateway->getId()))->toThrow(Payment_Exception::class, 'Unresolved')
         ->and(count($ctx->requests))->toBe(1);

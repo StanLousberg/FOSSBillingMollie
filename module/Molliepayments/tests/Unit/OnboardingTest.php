@@ -30,7 +30,7 @@ test('first payment commits consent and verified customer identity before its ex
         expect($ctx->db->isTransactionActive())->toBeFalse()
             ->and($row['consent_version'])->toBe(PaymentService::CONSENT_VERSION)
             ->and($row['consent_text'])->toBe($ctx->payments->onboarding($ctx->invoice->getId())['consent_text'])
-            ->and((int) $row['consent_accepted_at'])->toBeGreaterThanOrEqual(time() - 5)
+            ->and(Box\Mod\Molliepayments\Support\Timestamps::expired($row['consent_accepted_at'], 5))->toBeFalse()
             ->and($row['onboarding_status'])->toBe('pending_payment')
             ->and($row['lease'])->not->toBeNull()
             ->and(json_decode((string) $pending->createPsrRequest()->getBody(), true))->toEqual(json_decode($row['request'], true));
@@ -269,7 +269,7 @@ test('first payment safe replay refuses an expired creation window and rotated c
     mollieFirst($ctx);
     $row = mollieAttempt($ctx);
     $changes = ['payment_id' => null, 'status' => 'creating'];
-    $changes[$rotation ? 'credential_fingerprint' : 'created_at'] = $rotation ? str_repeat('0', 64) : time() - 2701;
+    $changes[$rotation ? 'credential_fingerprint' : 'created_at'] = $rotation ? str_repeat('0', 64) : Box\Mod\Molliepayments\Support\Timestamps::now(-2701);
     $ctx->db->update('molliepayments_attempt', $changes, ['id' => $row['id']]);
     expect(fn () => mollieFirst($ctx))->toThrow(Payment_Exception::class, 'Unresolved')
         ->and(count($ctx->requests))->toBe(1)->and(mollieAttempt($ctx)['id'])->toBe($row['id']);

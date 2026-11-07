@@ -16,6 +16,10 @@ Upstream source paths below are relative to [FOSSBilling](https://github.com/FOS
 
 The reviewed paths cover Core Doctrine timestamps/schema synchronization, load/timezone setup, Invoice/Transaction/Client/Order entities and repositories, invoice/transaction/balance services, encryption, email validation, API authentication, Twig factory/loader and their available upstream tests. Upstream tests include `tests/Unit/Box/CryptTest.php`, `tests/Unit/Box/TwigLoaderTest.php`, `tests/Unit/Box/AppClientTest.php`, `tests/Unit/Payment/Adapter/ClientBalanceTest.php` and `tests/Unit/FOSSBilling/Core/Security/LegacyToolsSplitTest.php`. Native module tests were also inspected under `src/modules/Invoice/tests/Unit/ServiceTest.php`, `ServiceTransactionTest.php` and `Repository/InvoiceItemRepositoryTest.php`, `src/modules/Client/tests/Unit/ServiceBalanceTest.php`, `ServiceTest.php` and `Entity/ClientTest.php`, and `src/modules/Order/tests/Unit/ServiceTest.php`. Native regressions protect processed-history freezing, SQLite-safe claims and invoice-before-balance locks. Module fixtures additionally exercise these real services with disposable databases and Mollie-specific races.
 
+## Subsequent development-only timestamp decision
+
+After this audit was merged, the project owner explicitly requested native readable DATETIME columns and waived migration/backward compatibility for timestamp storage because the development database will be recreated. That decision supersedes the epoch-retention recommendation below. Both module entities now map dates with Doctrine `Types::DATETIME_IMMUTABLE`; repositories write UTC `Y-m-d H:i:s` values, including nullable lease expiry. UTC storage preserves elapsed retry and lease timing across DST. Presentation uses the existing host timezone and the requested `Y-m-d H:i:s` format. DBAL conditional writes remain necessary, so attaching Core ORM lifecycle callbacks would still not replace timestamp assignment in these repositories. No historical conversion or database reset is implemented.
+
 ## Decisions by area
 
 ### Module timestamps and native lifecycle — retain epochs, reuse native lifecycle for native entities

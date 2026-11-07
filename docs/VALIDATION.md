@@ -318,3 +318,18 @@ ddev exec ./src/vendor/bin/php-cs-fixer fix --config=.local/MolliePayments/.php-
 Pinned runs used the same Pest arguments after changing directory to `/tmp/mp-native-pinned`. Host-side logs use `/tmp/mp-native-*.log`; temporary checkout Composer logs are inside DDEV `/tmp/`. MariaDB fixtures enforce the exact disposable database name `molliepayments_test`; the normal development database was never reset or used for these fixtures. All automated provider requests use SDK fakes/dummy keys. No Core/vendor changes, credentials or financial personal data are included in this deliverable. Existing host cache/link status was preserved.
 
 Remaining limits: stable is incompatible by design; PostgreSQL and the full unrelated Core suite were not run. No new interactive browser, real Mollie Test/public-webhook or production validation was performed in this refactor. Earlier manual evidence and its gaps remain as documented above. No production-readiness or automatic-recurring-collection claim is made.
+
+## Development DATETIME schema — 2026-11-07
+
+At the project owner's explicit request, module integer epochs have been replaced with native Doctrine DATETIME columns (`DATETIME_IMMUTABLE`) for creation/update, consent, mandate verification and lease expiry. Stored UTC strings and host-local CLI presentation use `Y-m-d H:i:s`, for example `2026-11-03 16:32:13`. Inactive lease expiry is null. Conditional DBAL updates, fenced workers and elapsed 45-minute retry protection are preserved; UTC storage avoids DST overlap ambiguity. The earlier epoch-retention audit recommendation is superseded for this development-only change.
+
+No migration, historical conversion or normal development database reset was performed. The owner will recreate the development database; former integer-timestamp tables are not an in-place upgrade target. The documentation and permanent agent instructions reflect the new schema.
+
+Executed through DDEV with mocked provider responses and disposable databases:
+
+- Installed host: full module unit/SQLite suite passed, 361 tests / 2653 assertions.
+- Existing isolated pinned Core host: full module unit/SQLite suite passed, 361 tests / 2649 assertions.
+- MariaDB integration suite passed, 22 tests / 251 assertions, using only `molliepayments_test`.
+- PHP syntax, PHP-CS-Fixer dry run, Composer strict validation and `git diff --check` passed.
+
+Regressions cover the readable stored/display format, native Doctrine date mappings, null lease release, UTC/Amsterdam presentation and both DST transitions, absolute retry/lease expiry, session timezone offsets, concurrent webhook/accounting behavior and unchanged encrypted snapshot replay. Logs use `/tmp/mp-datetime-*.log`. No new real-provider or browser validation was run.

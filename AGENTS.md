@@ -96,6 +96,7 @@ Legacy wallet columns and ledger history must be preserved by additive-only migr
 - Commit the verified credit, native invoice debit/paid state, transaction history and attempt guard atomically. Dispatch payment events after commit; native cron executes pending item tasks.
 - Checkout never reserves or spends existing account credit. Previously charged items and prior invoice allocations fail closed until FOSSBilling provides a supported outstanding-balance API; currency mismatches, non-two-decimal currencies and Add Funds invoices also fail closed.
 - Preserve attempts on upgrades/removal. Schema installation/update uses `SchemaSynchronizer::syncEntities()` for module entities only; no core migrations or destructive schema sync.
+- Module dates use native Doctrine DATETIME columns, stored as UTC `Y-m-d H:i:s`; display uses the host timezone in that format. Keep conditional DBAL timestamp writes and absolute elapsed retry/lease comparisons. The development-only transition from epochs requires fresh module tables; no migration or automatic database reset is provided.
 - CLI recovery must use the same native claimed transaction/verification path. Never clear an unresolved active slot simply to unblock a checkout.
 
 ## Source layout
