@@ -340,3 +340,27 @@ test('ordinary authorized invoice checkout never resolves the browser client ide
         ->and($ctx->payload['sequenceType'])->toBe('oneoff')
         ->and($ctx->db->fetchOne('SELECT COUNT(*) FROM molliepayments_customer'))->toBe(0);
 });
+
+test('existing v2 authorization resumes and settles without rewriting its evidence or request', function (bool $unresolved): void {
+    $ctx = mollieOnboarding(molliePaymentContext());
+    mollieFirst($ctx);
+    $row = mollieAttempt($ctx);
+    $legacy = 'Order #' . $ctx->order->getId() . ' (' . $ctx->order->getTitle() . '), ' . (new FOSSBilling\Core\Period('1M'))->getTitle() . '. I authorize future automatic collection through Mollie only for renewal invoices of the recurring order identified above. Amounts will be based on the actual invoices. I will complete this first payment using the account or card to authorize. Automatic collection is not enabled by this release.';
+    $ctx->payload['metadata']['consent_version'] = 'order-collection-v2';
+    $request = json_encode($ctx->payload, JSON_THROW_ON_ERROR);
+    $ctx->db->update('molliepayments_attempt', ['consent_version' => 'order-collection-v2', 'consent_text' => $legacy, 'request' => $request], ['id' => $row['id']]);
+    if ($unresolved) {
+        $ctx->db->update('molliepayments_attempt', ['payment_id' => null, 'status' => 'creating'], ['id' => $row['id']]);
+        expect(mollieFirst($ctx))->toContain('https://www.mollie.com/checkout/');
+        expect((string) $ctx->requests[1]->getBody())->toBe($request)
+            ->and($ctx->requests[1]->getHeaderLine('Idempotency-Key'))->toBe($ctx->requests[0]->getHeaderLine('Idempotency-Key'));
+    } else {
+        expect($ctx->payments->resumeCheckout($ctx->invoice->getId()))->toContain('https://www.mollie.com/checkout/');
+    }
+    $ctx->status = 'paid';
+    expect($ctx->payments->reverifyOnboarding($ctx->invoice->getId())['status'])->toBe('ready');
+    $after = mollieAttempt($ctx);
+    expect($after['consent_version'])->toBe('order-collection-v2')->and($after['consent_text'])->toBe($legacy)
+        ->and($after['consent_accepted_at'])->toBe($row['consent_accepted_at'])->and($after['request'])->toBe($request)
+        ->and(count(array_filter($ctx->requests, static fn ($request) => $request->getMethod() === 'POST')))->toBe($unresolved ? 2 : 1);
+})->with([false, true]);

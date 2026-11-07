@@ -15,7 +15,7 @@ jobs:
     strategy:
       matrix:
         database: [sqlite, mariadb]
-        host: [97bb583dd681e311e2d10fe8c648095f2a479878, main]
+        host: [7bc90195a535a03d33b4d0db91f41ba6989dee8a, main]
     services:
       mariadb:
         image: mariadb:11.8

@@ -43,3 +43,8 @@ The current form-IPN entry point also requires an invoice ID before adapter disp
 ## Native reuse review
 
 The [2026-11-07 audit](FOSSBILLING_NATIVE_REUSE_AUDIT.md) rechecked these proposals against pinned Core, installed/current main and stable 0.8.9. Existing `PayGatewayCustomer` is a gateway/client cache with cascading removal; it lacks environment/profile separation, encrypted creation snapshots and fenced unresolved-request recovery. MolliePayments retains its durable provider mapping instead of duplicating data into that cache. No generic customer subsystem is proposed or implemented.
+
+
+## Read-only renewal quotes
+
+A native read-only renewal quote including applicable taxes, renewal discounts and quantities would benefit every gateway's authorization page. Core currently exposes renewal line and promo resolvers but no complete read-only tax-inclusive renewal preview. MolliePayments composes those existing resolvers for an explicitly tax-exclusive current price and keeps the first invoice's tax-inclusive total separate. It does not generate temporary invoices, project tax or add a billing calculator. Actual future renewal invoices determine collection amounts.

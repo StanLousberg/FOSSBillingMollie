@@ -12,9 +12,11 @@ MolliePayments owns provider communication and payment-attempt idempotency. FOSS
 
 Normal invoice checkout automatically offers the Bootstrap authorization page to authenticated owners of an eligible recurring-order invoice, before creating a payment attempt. Acceptance creates a `first` payment scoped to that order; **Pay once without future authorization** creates `oneoff` without a Customer or consent. One-time purchases, standalone/custom invoices, mixed invoices and invoices for multiple orders use ordinary one-time checkout. Hash-authorized guests can pay once but cannot authorize future collection. Automatic recurring collection is still disabled. Real Test first-payment, Customer details, public webhook and mandate evidence is recorded in [VALIDATION.md](docs/VALIDATION.md); intermittent browser/session failures and remaining cart-flow validation are documented separately.
 
+The recurring authorization page names your configured company and separates the current renewal price (after native renewal discounts, excluding tax) from the first invoice payment (including tax). Future collections remain disabled; actual renewal invoices determine future amounts.
+
 ## Development setup
 
-Requirements: PHP 8.3+, Composer 2, FOSSBilling development baseline `97bb583dd681e311e2d10fe8c648095f2a479878`, and a Mollie Test key for real checkout validation. Published FOSSBilling 0.8.9 is unsupported. CI also tests current upstream `main` with SQLite and MariaDB.
+Requirements: PHP 8.3+, Composer 2, FOSSBilling development baseline `7bc90195a535a03d33b4d0db91f41ba6989dee8a`, and a Mollie Test key for real checkout validation. Published FOSSBilling 0.8.9 is unsupported. CI also tests current upstream `main` with SQLite and MariaDB.
 
 1. Follow [INSTALLATION.md](docs/INSTALLATION.md) to prepare the separate host, install SDK dependencies and link the gateway/module. Reuse existing workspaces and DDEV configuration.
 2. Configure credentials in the native payment gateway settings and run **Extensions → MolliePayments → Settings → Test connection**.

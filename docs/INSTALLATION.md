@@ -6,9 +6,9 @@ There is no supported production release. Use a disposable development host and 
 
 - PHP 8.3+ with FOSSBilling's required extensions, including cURL, JSON, mbstring and OpenSSL for this adapter.
 - Composer 2, Git, Docker and DDEV for the recommended local setup.
-- FOSSBilling development baseline `97bb583dd681e311e2d10fe8c648095f2a479878` (preview version `0.0.1`). CI also tests current upstream `main`.
+- FOSSBilling development baseline `7bc90195a535a03d33b4d0db91f41ba6989dee8a` (preview version `0.0.1`). CI also tests current upstream `main`.
 
-Published 0.8.9 is unsupported; a greater version number does not guarantee compatibility. The manifest identifies preview version `0.0.1`. Encrypted gateway secrets, masking/blank updates, invoice authorization/locking, transaction claims, deferred events and module-scoped schema synchronization are required. The small runtime contract guard rejects incompatible builds; never patch core or add a plaintext fallback.
+Published 0.8.9 is unsupported; a greater version number does not guarantee compatibility. The manifest identifies preview version `0.0.1`. Encrypted gateway secrets, masking/blank updates, invoice authorization/locking, transaction claims, deferred events and module-scoped schema synchronization are required. The previous baseline `97bb583dd681e311e2d10fe8c648095f2a479878` exposed the renewal line resolver only privately; the baseline now uses the audited installed Core revision so no private API access or copied renewal logic is needed. The authorization page also requires native `Invoice\Service::resolveRenewalLine()` and `Product\Service::getRenewalPromoAdjustments()` for read-only renewal pricing. The small runtime contract guard rejects incompatible builds; never patch core or add a plaintext fallback.
 
 The [native reuse audit](FOSSBILLING_NATIVE_REUSE_AUDIT.md) records the installed/main revision `7bc90195a535a03d33b4d0db91f41ba6989dee8a`, the pinned host and stable 0.8.9 (`e594f8a5f91ea4cc905708f8dc1e42ccb752ed21`). Stable lacks the Doctrine invoice/transaction entities and invoice locking required here; it is an explicit incompatibility, not a passing payment target. The original reuse review added no schema conversion. The later development-only DATETIME change below requires fresh module tables.
 
@@ -29,7 +29,7 @@ For a new workspace:
 mkdir -p ~/dev/MolliePayments-workspace
 cd ~/dev/MolliePayments-workspace
 git clone https://github.com/FOSSBilling/FOSSBilling.git
-git -C FOSSBilling checkout 97bb583dd681e311e2d10fe8c648095f2a479878
+git -C FOSSBilling checkout 7bc90195a535a03d33b4d0db91f41ba6989dee8a
 git clone https://github.com/StanLousberg/FOSSBillingMollie.git \
   FOSSBilling/.local/MolliePayments
 cd FOSSBilling/.local/MolliePayments

@@ -14,12 +14,13 @@ final class Compatibility
             \FOSSBilling\Core\Http\PaymentReturn::class => ['createResponse'],
             \Box\Mod\Client\ServiceBalance::class => ['getClientBalanceForUpdate'],
             \Box\Mod\Invoice\ServiceTransaction::class => ['claimForProcessing', 'createAndProcess'],
-            \Box\Mod\Invoice\Service::class => ['lockInvoiceState', 'markAsPaid', 'getPaymentInvoice'],
+            \Box\Mod\Invoice\Service::class => ['lockInvoiceState', 'markAsPaid', 'getPaymentInvoice', 'resolveRenewalLine'],
+            \Box\Mod\Product\Service::class => ['getRenewalPromoAdjustments'],
             \Box\Mod\Invoice\ServicePayGateway::class => ['getPaymentAdapter', 'getSecretFields'],
         ];
         foreach ($requirements as $class => $methods) {
             foreach ($methods as $method) {
-                if (!method_exists($class, $method)) {
+                if (!method_exists($class, $method) || !(new \ReflectionMethod($class, $method))->isPublic()) {
                     throw new \Payment_Exception('Unsupported FOSSBilling build. MolliePayments requires the documented Doctrine, balance-locking and payment-return contracts.', [], 409);
                 }
             }

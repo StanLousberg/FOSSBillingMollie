@@ -45,7 +45,8 @@ final class MandateService
             }
             $invoice = $this->di['em']->find(\Box\Mod\Invoice\Entity\Invoice::class, (int) $attempt['invoice_id']);
             $scope = $invoice === null ? null : Support\RecurringEligibility::scope($this->di['em'], $invoice);
-            if ($attempt['consent_version'] !== PaymentService::CONSENT_VERSION || $scope === null
+            // Existing v2 evidence remains valid for its original payment; new consent is v3.
+            if (!in_array($attempt['consent_version'], ['order-collection-v2', PaymentService::CONSENT_VERSION], true) || $scope === null
                 || ($payload['metadata']['order_id'] ?? null) !== $scope['order_id']
                 || ($payload['metadata']['order_period'] ?? null) !== $scope['period']) {
                 $changes['onboarding_status'] = 'manual_review';

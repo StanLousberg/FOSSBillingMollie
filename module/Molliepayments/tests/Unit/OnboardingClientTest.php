@@ -49,7 +49,7 @@ test('client API rejects unsafe writes before any customer or payment request', 
         'csrf_array' => $params['CSRFToken'] = ['disposable-nonce'],
         'consent_missing' => $params['consent'] = null,
         'consent_false' => $params['consent'] = false,
-        'consent_version' => $params['consent_version'] = 'old-text',
+        'consent_version' => $params['consent_version'] = 'order-collection-v2',
         'invoice' => $params['invoice_id'] = ['1'],
         default => null,
     };
@@ -135,7 +135,7 @@ function mollieRenderOnboarding(array $data = []): string
     $twig->addGlobal('app_area', 'client');
 
     return $twig->render('mod_molliepayments_onboarding.html.twig', ['CSRFToken' => 'disposable-nonce',
-        'onboarding' => $data + ['order_id' => '7', 'order_title' => 'Recurring service', 'period_title' => 'Every month', 'amount' => '12.34', 'currency' => 'EUR', 'can_resume' => false, 'can_pay' => true, 'can_verify' => true, 'consent_digest' => 'disposable-digest', 'invoice_id' => 1, 'invoice_hash' => 'disposable', 'status' => 'not_started', 'consent_version' => PaymentService::CONSENT_VERSION, 'consent_text' => PaymentService::CONSENT_TEXT]]);
+        'onboarding' => $data + ['company_name' => 'Example Hosting', 'recurring_amount' => '20.00', 'recurring_currency' => 'EUR', 'order_id' => '7', 'order_title' => 'Recurring service', 'period_title' => 'Every month', 'amount' => '12.34', 'currency' => 'EUR', 'can_resume' => false, 'can_pay' => true, 'can_verify' => true, 'consent_digest' => 'disposable-digest', 'invoice_id' => 1, 'invoice_hash' => 'disposable', 'status' => 'not_started', 'consent_version' => PaymentService::CONSENT_VERSION, 'consent_text' => sprintf(PaymentService::CONSENT_TEXT, 'Example Hosting')]]);
 }
 
 test('client template renders native filters CSRF and an unchecked explicit consent control', function (): void {
@@ -145,8 +145,8 @@ test('client template renders native filters CSRF and an unchecked explicit cons
     $xpath = new DOMXPath($document);
     expect($xpath->query('//input[@type="checkbox" and @name="consent" and not(@checked) and @required]')->length)->toBe(1)
         ->and($xpath->query('//style | //*[@style] | //link[@rel="stylesheet"]')->length)->toBe(0)
-        ->and($html)->toContain('col-12 col-lg-8', 'form-check-input', 'role="status"', 'aria-live="polite"', 'buttons.forEach', 'if (busy) return', 'Recurring service', '12.34 EUR')
-        ->and($html)->toContain('/api/client/molliepayments/onboarding_start', '/api/client/molliepayments/onboarding_verify', '/api/client/molliepayments/checkout', 'Pay once without future authorization', 'disposable-nonce', 'actual invoices', '/invoice/disposable');
+        ->and($html)->toContain('col-12 col-lg-9 col-xl-8', 'form-check-input', 'role="status"', 'aria-live="polite"', 'buttons.forEach', 'if (busy) return', 'Recurring service', '12.34 EUR')
+        ->and($html)->toContain('/api/client/molliepayments/onboarding_start', '/api/client/molliepayments/onboarding_verify', '/api/client/molliepayments/checkout', 'Pay once without future authorization', 'disposable-nonce', 'actual renewal invoices', '/invoice/disposable');
 });
 
 test('client template fallback supports symlinked installations and native theme precedence', function (): void {
@@ -170,6 +170,15 @@ test('direct API refuses ineligible or changed displayed authorization before pr
         $ctx->item->setType(Box\Mod\Invoice\Entity\InvoiceItem::TYPE_CUSTOM);
     } elseif ($case === 'changed') {
         $ctx->order->setTitle('Changed order authorization');
+    } elseif ($case === 'company') {
+        $ctx->services['system']->shouldReceive('getCompany')->andReturn(['name' => 'Changed Hosting']);
+    } elseif ($case === 'price') {
+        $ctx->order->setPrice('99.00');
+    } elseif ($case === 'period') {
+        $ctx->order->setPeriod('1Y');
+        $ctx->item->setPeriod('1Y');
+    } elseif ($case === 'amount') {
+        $ctx->item->setPrice('99.00');
     } else {
         $params['consent_digest'] = 'tampered';
     }
@@ -177,7 +186,7 @@ test('direct API refuses ineligible or changed displayed authorization before pr
     $api = mollieClientApi($ctx, $params);
     expect(fn () => $api->onboarding_start($params))->toThrow(Payment_Exception::class)
         ->and($ctx->requests)->toBeEmpty()->and($ctx->customerRequests)->toBeEmpty();
-})->with(['custom', 'changed', 'digest']);
+})->with(['custom', 'changed', 'company', 'price', 'period', 'amount', 'digest']);
 
 test('client UI translates payment states and only offers appropriate actions', function (string $state, bool $pay, string $message): void {
     $html = mollieRenderOnboarding(['status' => $state, 'can_pay' => $pay, 'can_verify' => !$pay]);
@@ -195,4 +204,88 @@ test('client UI translates payment states and only offers appropriate actions', 
     ['payment_failed', true, 'choose how to try again'],
     ['manual_review', false, 'support review'],
     ['mandate_invalid', false, 'mandate is not valid'],
+]);
+
+test('authorization page retrieves the native company name and escapes it in consent and copy', function (): void {
+    $ctx = mollieOnboarding(molliePaymentContext());
+    $ctx->services['system']->shouldReceive('getCompany')->once()->andReturn(['name' => 'Hosting & <Company>']);
+    $page = $ctx->payments->onboarding($ctx->invoice->getId());
+    expect($page['company_name'])->toBe('Hosting & <Company>')
+        ->and($page['consent_text'])->toContain('I authorize Hosting & <Company> to collect future renewal payments');
+    $html = mollieRenderOnboarding($page);
+    expect($html)->toContain('Hosting &amp; &lt;Company&gt;')->not->toContain('<Company>');
+});
+
+test('renewal summary uses native quantity and renewal discounts independently of taxed first payment', function (string $period): void {
+    $ctx = mollieOnboarding(molliePaymentContext());
+    $ctx->order->setPrice('30.00')->setQuantity(3)->setPeriod($period);
+    $ctx->item->setPeriod($period)->setPrice('10.00')->setQuantity(2)->setTaxed(true);
+    $ctx->invoice->setTaxrate(21);
+    $ctx->em->flush();
+    $ctx->services['product']->shouldReceive('getRenewalPromoAdjustments')->once()->with($ctx->order, 30.0, 3.0)
+        ->andReturn([['discount_amount' => 9.0], ['discount_amount' => 6.0]]);
+    $page = $ctx->payments->onboarding($ctx->invoice->getId());
+    expect($page['recurring_amount'])->toBe('75.00')->and($page['recurring_currency'])->toBe('EUR')
+        ->and($page['amount'])->toBe('24.20')->and($page['period'])->toBe($period)
+        ->and($page['period_title'])->toBe((new FOSSBilling\Core\Period($period))->getTitle())
+        ->and($ctx->requests)->toBeEmpty()->and($ctx->customerRequests)->toBeEmpty()
+        ->and($ctx->db->fetchOne('SELECT COUNT(*) FROM molliepayments_attempt'))->toBe(0);
+    expect(mollieRenderOnboarding($page))->toContain('75.00 EUR', '24.20 EUR', 'excluding tax', 'including tax');
+})->with(['1M', '3M', '1Y', '2Y']);
+
+test('renewal summary respects native renewal line overrides instead of initial order price', function (): void {
+    $ctx = mollieOnboarding(molliePaymentContext());
+    $ctx->invoiceService->shouldReceive('resolveRenewalLine')->once()->with($ctx->order)
+        ->andReturn(['price' => 65.0, 'line' => ['price' => 65.0, 'quantity' => 2]]);
+    $ctx->services['product']->shouldReceive('getRenewalPromoAdjustments')->once()->with($ctx->order, 65.0, 2.0)->andReturn([]);
+    expect($ctx->payments->onboarding($ctx->invoice->getId())['recurring_amount'])->toBe('130.00');
+});
+
+test('authorization markup stacks details on small screens and keeps only essential status feedback', function (): void {
+    $html = mollieRenderOnboarding(['can_verify' => false]);
+    $document = new DOMDocument();
+    @$document->loadHTML($html);
+    $xpath = new DOMXPath($document);
+    expect($xpath->query('//dl[contains(@class,"row")]/dt[contains(@class,"col-sm-4")]')->length)->toBe(5)
+        ->and($xpath->query('//dl/dd[contains(@class,"col-sm-8")]')->length)->toBe(5)
+        ->and($xpath->query('//*[contains(concat(" ",normalize-space(@class)," ")," alert ")]')->length)->toBe(0)
+        ->and($xpath->query('//ol | //style | //*[@style]')->length)->toBe(0)
+        ->and($html)->not->toContain('justify-content-center', 'text-center', 'How authorization works')
+        ->and(substr_count($html, 'Automatic recurring collection is not yet enabled'))->toBe(1);
+});
+
+test('rendered actions follow actual persisted payment state', function (string $state, bool $pay, bool $resume, bool $verify): void {
+    $ctx = mollieOnboarding(molliePaymentContext());
+    if ($state === 'existing_payment') {
+        $ctx->payments->oneTimeCheckout($ctx->invoice->getId());
+    } elseif ($state === 'paid') {
+        $ctx->invoice->setStatus('paid');
+        $ctx->em->flush();
+    } elseif ($state !== 'not_started') {
+        mollieFirst($ctx);
+        if ($state === 'manual_review') {
+            $ctx->db->update('molliepayments_attempt', ['error' => 'requires_review'], ['id' => mollieAttempt($ctx)['id']]);
+        } elseif ($state !== 'pending_payment') {
+            $ctx->status = $state === 'payment_failed' ? 'failed' : 'paid';
+            if ($state === 'pending_mandate') {
+                $ctx->mandateStatus = 'pending';
+            } elseif ($state === 'mandate_invalid') {
+                $ctx->mandateStatus = 'invalid';
+            }
+            mollieWebhook($ctx);
+        }
+    }
+    $page = $ctx->payments->onboarding($ctx->invoice->getId());
+    expect($page['status'])->toBe($state);
+    $document = new DOMDocument();
+    @$document->loadHTML(mollieRenderOnboarding($page));
+    $xpath = new DOMXPath($document);
+    foreach (['onboarding' => $pay, 'oneoff' => $pay, 'resume' => $resume, 'verify' => $verify] as $action => $visible) {
+        expect($xpath->query('//form[@id="molliepayments-' . $action . '"]')->length)->toBe($visible ? 1 : 0);
+    }
+})->with([
+    ['not_started', true, false, false], ['pending_payment', false, true, true],
+    ['existing_payment', false, true, false], ['paid', false, false, false],
+    ['payment_failed', true, false, true], ['pending_mandate', false, false, true],
+    ['ready', false, false, true], ['mandate_invalid', false, false, true], ['manual_review', false, false, true],
 ]);

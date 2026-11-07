@@ -19,6 +19,13 @@ function mollieOnboarding(object $ctx): object
         $ctx->item->setType(Box\Mod\Invoice\Entity\InvoiceItem::TYPE_ORDER)->setRelId((string) $order->getId())->setPeriod('1M');
         $ctx->em->flush();
     }
+    $order->setPrice('20.00')->setQuantity(1)->setCurrency('EUR');
+    $ctx->em->flush();
+    $ctx->services['system']->shouldReceive('getCompany')->byDefault()->andReturn(['name' => 'Example Hosting']);
+    $product = new Box\Mod\Product\Entity\Product();
+    $product->setType('custom');
+    $ctx->services['product']->shouldReceive('findProductById')->byDefault()->andReturn($product);
+    $ctx->services['product']->shouldReceive('getRenewalPromoAdjustments')->byDefault()->andReturn([]);
     $ctx->order = $order;
     $orderService = new Box\Mod\Order\Service();
     $orderService->setDi($ctx->di);

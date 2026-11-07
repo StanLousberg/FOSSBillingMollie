@@ -25,8 +25,9 @@ use Mollie\Api\Resources\Payment;
 /** Checkout and authenticated reconciliation; the host remains the accounting authority. */
 final class PaymentService
 {
-    public const CONSENT_VERSION = 'order-collection-v2';
-    public const CONSENT_TEXT = 'I authorize future automatic collection through Mollie only for renewal invoices of the recurring order identified above. Amounts will be based on the actual invoices. I will complete this first payment using the account or card to authorize. Automatic collection is not enabled by this release.';
+    public const CONSENT_VERSION = 'order-collection-v3';
+    private const LEGACY_CONSENT_TEXT = 'I authorize future automatic collection through Mollie only for renewal invoices of the recurring order identified above. Amounts will be based on the actual invoices. I will complete this first payment using the account or card to authorize. Automatic collection is not enabled by this release.';
+    public const CONSENT_TEXT = 'I authorize %s to collect future renewal payments for this order through the payment method I select during Mollie checkout. Amounts will be based on the actual renewal invoices.';
 
     private const TERMINAL_STATUSES = ['failed', 'canceled', 'expired'];
 
@@ -111,22 +112,47 @@ final class PaymentService
             $status = 'existing_payment';
         }
 
-        return $scope + ['invoice_id' => $invoiceId, 'invoice_hash' => $invoice->getHash(), 'status' => $status,
-            'amount' => Amount::fromHost($this->invoiceService()->getTotalWithTax($invoice)), 'currency' => $invoice->getCurrency(),
+        $recurring = $this->recurringPrice($scope);
+        $amount = Amount::fromHost($this->invoiceService()->getTotalWithTax($invoice));
+
+        return $scope + $recurring + ['invoice_id' => $invoiceId, 'invoice_hash' => $invoice->getHash(), 'status' => $status,
+            'amount' => $amount, 'currency' => $invoice->getCurrency(),
             'can_pay' => $canPay, 'can_resume' => !$canPay && $attempt && $attempt['status'] === 'open' && $attempt['error'] === null && $status !== 'manual_review' && $attempt['payment_id'] !== null, 'can_verify' => $attempt && $attempt['consent_version'] !== null && $attempt['payment_id'] !== null,
-            'consent_digest' => hash('sha256', $invoiceId . ':' . self::CONSENT_VERSION . ':' . $this->consentText($scope)),
+            'consent_digest' => hash('sha256', json_encode([$invoiceId, self::CONSENT_VERSION, $this->consentText($scope), $recurring, $amount, $invoice->getCurrency()], JSON_THROW_ON_ERROR)),
             'consent_text' => $this->consentText($scope), 'consent_version' => self::CONSENT_VERSION];
     }
 
     private function recurringScope(Invoice $invoice): array
     {
-        return Support\RecurringEligibility::scope($this->di['em'], $invoice)
+        $scope = Support\RecurringEligibility::scope($this->di['em'], $invoice)
             ?? throw new \Payment_Exception('Mandate authorization requires an invoice containing only one eligible recurring order.', [], 403);
+
+        return $scope + ['company_name' => (string) ($this->di['mod_service']('System')->getCompany()['name'] ?? '')];
     }
 
-    private function consentText(array $scope): string
+    /** Read-only composition of the same renewal line and promo resolvers used by Core. */
+    private function recurringPrice(array $scope): array
     {
-        return 'Order #' . $scope['order_id'] . ' (' . $scope['order_title'] . '), ' . $scope['period_title'] . '. ' . self::CONSENT_TEXT;
+        $order = $this->di['em']->find(\Box\Mod\Order\Entity\Order::class, (int) $scope['order_id']);
+        ['price' => $price, 'line' => $line] = $this->invoiceService()->resolveRenewalLine($order);
+        $item = new InvoiceItem();
+        $item->setPrice((string) $price)->setQuantity($line['quantity'] ?? $order->getQuantity());
+        $total = $this->di['mod_service']('Invoice', 'InvoiceItem')->getTotal($item);
+        $adjustments = $this->di['mod_service']('Product')->getRenewalPromoAdjustments($order, (float) $price, (float) $item->getQuantity());
+
+        return ['recurring_amount' => Amount::fromHost($total - array_sum(array_column($adjustments, 'discount_amount'))),
+            'recurring_currency' => $order->getCurrency()];
+    }
+
+    private function consentText(array $scope, string $version = self::CONSENT_VERSION): string
+    {
+        $text = match ($version) {
+            self::CONSENT_VERSION => sprintf(self::CONSENT_TEXT, $scope['company_name']),
+            'order-collection-v2' => self::LEGACY_CONSENT_TEXT,
+            default => throw new \Payment_Exception('Unknown authorization version. Contact support.', [], 409),
+        };
+
+        return 'Order #' . $scope['order_id'] . ' (' . $scope['order_title'] . '), ' . $scope['period_title'] . '. ' . $text;
     }
 
     /** Native gateway entry: authenticated owners choose before any payment reservation. */
@@ -170,7 +196,7 @@ final class PaymentService
         }
         $payload = json_decode($attempt['request'], true, 512, JSON_THROW_ON_ERROR);
         if ($attempt['consent_version'] !== null && (($payload['metadata']['order_id'] ?? null) !== $scope['order_id']
-            || ($payload['metadata']['order_period'] ?? null) !== $scope['period'] || $attempt['consent_text'] !== $this->consentText($scope))) {
+            || ($payload['metadata']['order_period'] ?? null) !== $scope['period'] || $attempt['consent_text'] !== $this->consentText($scope, $attempt['consent_version']))) {
             throw new \Payment_Exception('Recurring order authorization changed. Contact support.', [], 409);
         }
         $payment = $this->fetchPayment($attempt['payment_id'], $key);
@@ -268,7 +294,7 @@ final class PaymentService
             $scope = $this->recurringScope($this->ownedInvoice($invoiceId));
             if (($payload['metadata']['order_id'] ?? null) !== $scope['order_id']
                 || ($payload['metadata']['order_period'] ?? null) !== $scope['period']
-                || $attempt['consent_text'] !== $this->consentText($scope)) {
+                || $attempt['consent_text'] !== $this->consentText($scope, $attempt['consent_version'])) {
                 throw new \Payment_Exception('Recurring order authorization changed. Reconciliation required.', [], 409);
             }
             if (($payload['customerId'] ?? null) !== $customer['customer_id'] || ($payload['metadata']['customer_mapping'] ?? null) !== $customer['id']) {

@@ -333,3 +333,16 @@ Executed through DDEV with mocked provider responses and disposable databases:
 - PHP syntax, PHP-CS-Fixer dry run, Composer strict validation and `git diff --check` passed.
 
 Regressions cover the readable stored/display format, native Doctrine date mappings, null lease release, UTC/Amsterdam presentation and both DST transitions, absolute retry/lease expiry, session timezone offsets, concurrent webhook/accounting behavior and unchanged encrypted snapshot replay. Logs use `/tmp/mp-datetime-*.log`. No new real-provider or browser validation was run.
+
+
+## Authorization page revision (2026-11-07)
+
+Base: PR #18 head `1039b8d2fc70b8b2bdbd1b860021c4ca69a9f52c`, including merged PR #19. Validated with installed FOSSBilling `7bc90195a535a03d33b4d0db91f41ba6989dee8a`, PHP 8.3.30 and the mocked Mollie SDK. The development/CI pin now matches this installed host: its public renewal resolver replaces the private method in the previous pinned host. Stable 0.8.9 remains unsupported; it lacks the required Doctrine/payment contracts and was inspected as an incompatible reference, not executed as a payment target.
+
+- Module unit suite: **383 tests, 2868 assertions**, passing.
+- Disposable MariaDB integration suite: **22 tests, 251 assertions**, passing, including independent workers, immutable first-payment retries and mandate verification.
+- PHP CS Fixer: **50 files**, no changes required.
+- Consent tests reject stale v2 forms and changed company, order title, interval, recurring price, first-payment amount or digest before provider activity. Existing v2 attempts resume, retry an unresolved creation with the original request/key, settle and verify mandates without rewriting evidence.
+- Render tests use native Twig filters and check escaping, CSRF, unchecked consent, Bootstrap responsive columns/wrapping, absence of custom CSS/authorization steps, and actions for all persisted payment states. Pricing tests cover quantities, native renewal overrides/discounts, invoice tax and monthly, quarterly, annual and biennial periods.
+
+Responsive validation here is rendered-markup validation; no new browser viewport or real Mollie checkout/public-webhook run was performed for this page revision. Automatic recurring collection remains disabled.
