@@ -31,7 +31,7 @@ function mollieCustomers(object $ctx): object
             // Reservation and lease must be visible before any provider POST.
             expect($row['status'])->toBe('creating')->and($row['lease'])->not->toBeNull()
                 ->and($request->getHeaderLine('Idempotency-Key'))->toBe($row['idempotency_key'])
-                ->and($ctx->customerPayload)->toBe(json_decode($row['request'], true));
+                ->and($ctx->customerPayload)->toEqual(Box\Mod\Molliepayments\Support\CustomerRequest::payload($row['request'], $row['id'], $ctx->di['crypt']));
 
             return MockResponse::created(mollieCustomerResponse($ctx));
         },

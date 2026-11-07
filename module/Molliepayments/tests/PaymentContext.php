@@ -41,7 +41,7 @@ function molliePaymentContext(string $environment = 'test', ?string $databasePat
     $ctx->em = new EntityManager(DriverManager::getConnection($connectionParameters ?? ($databasePath === null ? ['driver' => 'pdo_sqlite', 'memory' => true] : ['driver' => 'pdo_sqlite', 'path' => $databasePath])), $config);
     $ctx->db = $ctx->em->getConnection();
     $classes = [Client::class, ClientBalance::class, Currency::class, Invoice::class, InvoiceItem::class,
-        InvoiceEvent::class, PayGateway::class, Transaction::class, MolliePaymentAttempt::class, Box\Mod\Molliepayments\Entity\MollieCustomer::class, Box\Mod\Order\Entity\Order::class];
+        InvoiceEvent::class, PayGateway::class, Transaction::class, MolliePaymentAttempt::class, Box\Mod\Molliepayments\Entity\MollieCustomer::class, Box\Mod\Order\Entity\Order::class, Box\Mod\Order\Entity\OrderMeta::class];
     if ($ctx->db->getDatabasePlatform() instanceof Doctrine\DBAL\Platforms\SQLitePlatform) {
         $ctx->db->executeStatement('PRAGMA busy_timeout = 5000');
     }
@@ -80,9 +80,9 @@ function molliePaymentContext(string $environment = 'test', ?string $databasePat
         $ctx->gateway->setEnabled(true);
         $ctx->gateway->setAllowSingle(true);
         $ctx->gateway->setTestMode($environment === 'test');
-        $ctx->gateway->setAcceptedCurrencies('["EUR"]');
+        $ctx->gateway->setAcceptedCurrencies(mollieGatewayValue('acceptedCurrencies', ['EUR']));
         $ctx->key = mollieDummyKey($environment);
-        $ctx->gateway->setConfig(json_encode([($environment === 'test' ? 'test_api_key' : 'api_key') => $ctx->key]));
+        $ctx->gateway->setConfig(mollieGatewayValue('config', [($environment === 'test' ? 'test_api_key' : 'api_key') => $ctx->key]));
         $ctx->em->persist($ctx->gateway);
         $ctx->em->flush();
         $ctx->invoice = new Invoice();
@@ -108,7 +108,7 @@ function molliePaymentContext(string $environment = 'test', ?string $databasePat
         $ctx->gateway = $ctx->em->getRepository(PayGateway::class)->findOneBy([]);
         $ctx->invoice = $ctx->em->getRepository(Invoice::class)->findOneBy([]);
         $ctx->item = $ctx->em->getRepository(InvoiceItem::class)->findOneBy([]);
-        $ctx->key = json_decode($ctx->gateway->getConfig(), true)['test_api_key'];
+        $ctx->key = mollieGatewayConfig($ctx->gateway)['test_api_key'];
         $request = $ctx->db->fetchOne('SELECT request FROM molliepayments_attempt LIMIT 1');
         $ctx->payload = $request ? json_decode($request, true) : null;
     }
@@ -187,10 +187,14 @@ function mollieProviderPayment(object $ctx): array
 {
     $result = ['resource' => 'payment', 'id' => $ctx->paymentId ?? 'tr_disposable123', 'mode' => $ctx->gateway->isTestMode() ? 'test' : 'live',
         'description' => 'Disposable invoice', 'amount' => $ctx->payload['amount'], 'status' => $ctx->status,
-        'sequenceType' => 'oneoff', 'metadata' => $ctx->payload['metadata'],
+        'sequenceType' => $ctx->payload['sequenceType'], 'metadata' => $ctx->payload['metadata'],
         'expiresAt' => date(DATE_ATOM, time() + 900),
         '_links' => ['checkout' => ['href' => 'https://www.mollie.com/checkout/disposable123'],
             'self' => ['href' => 'https://api.mollie.com/v2/payments/tr_disposable123']]];
+    if (($ctx->payload['sequenceType'] ?? null) === 'first') {
+        $result += ['customerId' => $ctx->payload['customerId'], 'profileId' => $ctx->profileId ?? 'pfl_disposable',
+            'method' => 'ideal', 'mandateId' => $ctx->mandateId ?? null];
+    }
     if ($ctx->status === 'paid') {
         $result['paidAt'] = date(DATE_ATOM);
     }

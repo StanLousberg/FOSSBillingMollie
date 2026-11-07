@@ -62,7 +62,7 @@ class Payment_Adapter_MolliePayments extends Payment_AdapterAbstract
         if ($subscription || filter_var($invoice_id, FILTER_VALIDATE_INT, ['options' => ['min_range' => 1]]) === false) {
             throw new Payment_Exception('MolliePayments requires a valid one-time invoice payment.');
         }
-        $url = $this->payments()->checkout((int) $invoice_id, (int) $this->getParam('gateway_id'));
+        $url = $this->payments()->checkoutRoute((int) $invoice_id, (int) $this->getParam('gateway_id'));
         if ($url === null) {
             return '<p>Mollie is processing this payment. Return to the invoice to check its current status.</p>';
         }
