@@ -42,3 +42,5 @@ From this repository, `composer install` installs the locked SDK into `module/Mo
 This unofficial project is not affiliated with or endorsed by Mollie B.V. or FOSSBilling. **MolliePayments** is the product name; `StanLousberg/FOSSBillingMollie` is only the GitHub repository identifier.
 
 Source code is licensed under [Apache-2.0](LICENSE). Mollie's original logo and trademarks are separate from that license; see [BRANDING.md](docs/BRANDING.md).
+
+Pending mandate verification uses bounded, provider-read-only native cron checks. See the [PR #18 hardening findings and remaining browser/session blocker](docs/PR18_HARDENING_REVIEW.md); automatic collection remains disabled.

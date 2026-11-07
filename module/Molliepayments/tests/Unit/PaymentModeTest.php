@@ -90,3 +90,13 @@ test('native gateway configuration defaults to both and saves the selected mode'
     }
     expect(Payment_Adapter_MolliePayments::getConfig()['supports_subscriptions'])->toBeFalse();
 });
+
+test('disallowed payment modes explain the required alternative without starting checkout', function (string $mode, string $message): void {
+    $ctx = mollieOnboarding(molliePaymentContext());
+    mollieSetPaymentMode($ctx, $mode);
+    $run = $mode === 'recurring_only'
+        ? fn () => $ctx->payments->oneTimeCheckout($ctx->invoice->getId())
+        : fn () => mollieFirst($ctx);
+    expect($run)->toThrow(Payment_Exception::class, $message)
+        ->and($ctx->requests)->toBeEmpty()->and($ctx->customerRequests)->toBeEmpty();
+})->with([['recurring_only', 'One-time, mixed and unsupported invoices need another payment gateway'], ['one_time_only', 'Choose Pay once']]);

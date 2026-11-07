@@ -115,7 +115,7 @@ test('incomplete mandate never prevents invoice settlement and can recover using
         ->and(count(array_filter($ctx->requests, static fn ($request) => $request->getMethod() === 'POST')))->toBe(1)
         ->and($ctx->db->fetchOne('SELECT COUNT(*) FROM client_balance'))->toBe(2);
 })->with([
-    ['missing', 'pending_mandate'], ['pending', 'pending_mandate'], ['invalid', 'mandate_invalid'],
+    ['missing', 'manual_review'], ['pending', 'pending_mandate'], ['invalid', 'mandate_invalid'],
     ['scope', 'manual_review'], ['unavailable', 'pending_mandate'], ['owner', 'manual_review'], ['link', 'manual_review'],
     ['mode', 'manual_review'], ['id', 'manual_review'], ['method', 'manual_review'],
 ]);
@@ -321,9 +321,10 @@ test('native payment event is dispatched after financial commit and before manda
     });
     mollieFirst($ctx);
     $ctx->status = 'paid';
-    $ctx->responses[GetMandateRequest::class] = static function () use (&$eventCount): never {
+    $ctx->responses[GetMandateRequest::class] = static function () use (&$eventCount): MockResponse {
         expect($eventCount)->toBe(1);
-        throw new RuntimeException('Simulated mandate outage after committed payment event');
+
+        return new MockResponse(['status' => 503, 'title' => 'Unavailable'], 503);
     };
     mollieWebhook($ctx);
     mollieWebhook($ctx);

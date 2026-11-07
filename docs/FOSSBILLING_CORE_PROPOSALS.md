@@ -53,3 +53,12 @@ A native read-only renewal quote including applicable taxes, renewal discounts a
 ## Gateway checkout policy and theme consent
 
 Core already persists arbitrary adapter config, renders native select fields and returns `invoice_hash`/selected gateway after cart checkout. These are reused without changes. MolliePayments' mode only selects between provider `oneoff` and consent-backed `first` invoice payments; it is not a generic subscription or cart implementation. Cart themes may call an authenticated module endpoint after native checkout instead of triggering the ordinary invoice payment callback. Eligibility, explicit consent/source, Customer mapping and mandate verification remain provider integration concerns. No Core payment-mode API, cart fork or additional persistence is needed for this change. Native credits/free orders and non-Mollie gateway policies remain outside this adapter.
+
+
+## Final hardening: availability and session consistency
+
+Native gateway listing does not expose invoice-specific adapter eligibility filtering. MolliePayments therefore retains native capability flags and refuses unsuitable `recurring_only` checkout explicitly before provider creation. An upstream invoice-aware eligibility hook could improve every gateway's selection UI; no Core/theme override is introduced here.
+
+A new disposable browser run reproduced native CSRF rejection on both onboarding and an unrelated native profile request: form nonce and decoded CSRF cookie matched, but the persisted session nonce differed. The configured public origin/form action matched and native API/session unit tests passed. The host session/persistence cause remains open; no adapter-specific session mutation or CSRF bypass is justified. Core's optional-empty-cookie semantics are now matched while session nonce enforcement remains mandatory.
+
+Mandate recovery reuses native `AfterAdminCronRunEvent`, `NamedLock`, claimed transaction processing and existing attempt/Customer leases. It performs only provider reads and local status/audit writes; no collection scheduler or billing feature is added. See [the hardening review](PR18_HARDENING_REVIEW.md).

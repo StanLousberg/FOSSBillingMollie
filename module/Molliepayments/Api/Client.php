@@ -104,7 +104,7 @@ final class Client extends AbstractApi
         $sessionToken = $this->di['session']->get('csrf_token');
         $cookie = $request->cookies->get(CookieNames::CSRF) ?? $request->cookies->get(CookieNames::LEGACY_CSRF);
         if (!$request->isMethod('POST') || !is_string($token) || !is_string($sessionToken) || $sessionToken === ''
-            || !hash_equals($sessionToken, $token) || ($cookie !== null && (!is_string($cookie) || !hash_equals($sessionToken, $cookie)))) {
+            || !hash_equals($sessionToken, $token) || ($cookie !== null && $cookie !== '' && (!is_string($cookie) || !hash_equals($sessionToken, $cookie)))) {
             throw new \Payment_Exception('CSRF token invalid or request method unsupported.', [], 403);
         }
     }

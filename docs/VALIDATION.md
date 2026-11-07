@@ -361,3 +361,32 @@ Executed locally with PHP 8.3.30 and faked Mollie SDK requests:
 - Independent MariaDB workers race cart requests while preserving one reservation and original consent source. Existing atomic settlement, first-payment Customer identity, mandate verification and accounting regressions still pass.
 
 No real Mollie API calls, new public-webhook evidence or browser cart checkout were performed for this feature. The actual custom theme still needs manual checks for login/CSRF, consent rendering and submission capture, correct native callback replacement, all three modes, selected-gateway changes, mixed/free/credit-covered carts, double clicks, lost responses and verified Test checkout/mandate recovery. See [CUSTOM_CART_CHECKOUT.md](CUSTOM_CART_CHECKOUT.md). Automatic recurring collection remains disabled.
+
+
+## Final PR #18 hardening — 2026-11-07
+
+See [PR18_HARDENING_REVIEW.md](PR18_HARDENING_REVIEW.md) for per-risk causes, actual SDK/Core contracts, changed behavior and operator recovery.
+
+Reference: local/remote PR head `294de042114b342b8da320885efd54221bcc7fdd`; installed SDK **v4.0.0**. Pinned Core `7bc90195a535a03d33b4d0db91f41ba6989dee8a` and remote `main` were verified to be the same SHA, so both current CI matrix labels resolve to the locally tested source. No distinct second revision or GitHub Actions run is claimed.
+
+Executed locally on PHP 8.3.30:
+
+- All module unit/SQLite tests: **531 tests, 4020 assertions**, passing.
+- All disposable MariaDB integration tests: **39 tests, 437 assertions**, passing, including duplicate callbacks, independent workers, immutable retries, concurrent missing-ID recovery, native named locking, mode matrices and one accounting receipt.
+- Existing native API controller and Session tests: **144 tests, 459 assertions**, passing.
+- PHP syntax: **57 own PHP files**, no errors; vendor excluded.
+- PHP-CS-Fixer: **57 files**, no remaining changes.
+- Composer: `composer validate --strict --no-check-publish` passed. No dependency or Core Composer change.
+- `git diff --check` passed.
+
+Additional native Core contract command:
+
+```bash
+ddev exec ./src/vendor/bin/pest --test-directory=../tests --configuration=phpunit.xml.dist src/modules/Api/tests/Unit/Controller/ClientTest.php tests/Unit/FOSSBilling/Core/SessionTest.php
+```
+
+The new real browser validation used a new disposable client and native EUR 1.00 recurring invoice, with welcome email disabled and the saved enabled Test gateway. Login (HTTP 200), owned page rendering, same-origin form action and form/decoded-cookie agreement were confirmed. Native `onboarding_start` and an unrelated native profile request both returned **403**, with an explicit native CSRF error. A read-only check found one different persisted session nonce. No nonce/session data, password, API key or provider/instrument response was logged; no session/token/security configuration was altered to bypass the failure.
+
+The new invoice remains **unpaid**, with **0 attempts, 0 Customer mappings, 0 client ledger entries**. Consequently actual first-payment creation, Hosted Checkout completion, public webhook settlement and real mandate verification were **not executed** for this revision. Historical successful evidence is not counted as a new pass. Resolve the native session/public-deployment inconsistency and rerun the complete Test flow before unconditional merge approval. No Live payment was performed, no existing personal client/invoice/gateway record was edited, and only `molliepayments_test` was reset. The newly created disposable records are retained for audit.
+
+Module CSRF tests cover native optional-empty-cookie semantics, matching/nonmatching session nonces, JSON/header/form/legacy-cookie transport and native session regeneration. Mandate tests cover missing ID/link, exact instrument matching (never last-four), incomplete/ambiguous results, pending-to-valid and late appearance, 24-hour escalation, transient 429/5xx/SDK transport errors, explicit invalid/deleted mandates, Customer lease contention, stale-lease fencing, five-attempt cron bounds, cooldown and recovery after a failed payment GET. No renewal collection scheduler or new provider POST was added.

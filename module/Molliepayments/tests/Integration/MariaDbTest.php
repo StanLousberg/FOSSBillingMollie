@@ -6,6 +6,7 @@ use Box\Mod\Invoice\Entity\Invoice;
 use Doctrine\DBAL\Tools\DsnParser;
 
 require_once dirname(__DIR__) . '/ClientContext.php';
+require_once dirname(__DIR__) . '/MandateContext.php';
 
 beforeEach(function (): void {
     if (!getenv('MOLLIEPAYMENTS_MYSQL_URL')) {
@@ -439,7 +440,8 @@ test('MariaDB first payment lost response reuses durable consent and recovers mi
     $retry->status = 'paid';
     $retry->mandateId = null;
     mollieWebhook($retry);
-    expect($retry->invoice->getStatus())->toBe('paid')->and(mollieAttempt($retry)['onboarding_status'])->toBe('pending_mandate')
+    // No instrument evidence is returned in this fixture: require review until a verified payment link appears.
+    expect($retry->invoice->getStatus())->toBe('paid')->and(mollieAttempt($retry)['onboarding_status'])->toBe('manual_review')
         ->and(mollieAttempt($retry)['request'])->toBe($original['request'])
         ->and(mollieAttempt($retry)['consent_accepted_at'])->toBe($original['consent_accepted_at']);
     $retry->mandateId = 'mdt_disposable';
@@ -606,4 +608,50 @@ test('MariaDB concurrent cart consent calls preserve one original authorization 
     expect((int) $check->db->fetchOne('SELECT COUNT(*) FROM molliepayments_attempt'))->toBe(1)
         ->and(json_decode($row['request'], true)['metadata']['consent_source'])->toBe('cart_checkout')
         ->and($row['consent_accepted_at'])->not->toBeNull();
+});
+
+test('MariaDB missing mandate IDs recover pending to valid with concurrent native workers', function (): void {
+    $ctx = mollieDiscoverableMandate(mollieOnboarding(mollieMariaContext()));
+    $ctx->boundMandate['status'] = 'pending';
+    $ctx->discoveryMandates = [$ctx->boundMandate];
+    mollieFirst($ctx);
+    $ctx->status = 'paid';
+    mollieWebhook($ctx);
+    $before = mollieAttempt($ctx);
+    expect($before['onboarding_status'])->toBe('pending_mandate');
+    $ctx->db->close();
+    $worker = static function (): void {
+        $child = mollieDiscoverableMandate(mollieOnboarding(mollieMariaContext(false)));
+        $child->status = 'paid';
+        $child->payments->reverifyOnboarding($child->invoice->getId());
+        $child->db->close();
+    };
+    mollieMariaWorkers([$worker, $worker]);
+    $check = mollieOnboarding(mollieMariaContext(false));
+    expect(mollieAttempt($check)['onboarding_status'])->toBe('ready')
+        ->and(mollieAttempt($check)['mandate_id'])->toBe('mdt_bound')
+        ->and(mollieAttempt($check)['request'])->toBe($before['request'])
+        ->and((int) $check->db->fetchOne("SELECT COUNT(*) FROM client_balance WHERE type = 'transaction'"))->toBe(1)
+        ->and((int) $check->db->fetchOne('SELECT COUNT(*) FROM molliepayments_attempt'))->toBe(1);
+});
+
+test('MariaDB cron retry uses native named locking and preserves readiness during outage', function (): void {
+    $ctx = mollieOnboarding(mollieMariaContext());
+    mollieFirst($ctx);
+    $ctx->status = 'paid';
+    $ctx->mandateStatus = 'pending';
+    mollieWebhook($ctx);
+    $ctx->db->update('molliepayments_attempt', ['updated_at' => Box\Mod\Molliepayments\Support\Timestamps::now(-360)], ['id' => mollieAttempt($ctx)['id']]);
+    $other = mollieOnboarding(mollieMariaContext(false));
+    FOSSBilling\Core\Doctrine\NamedLock::acquire($other->db, 'molliepayments-mandate-reverification', 0);
+    expect($ctx->payments->retryPendingMandates())->toBe(0);
+    FOSSBilling\Core\Doctrine\NamedLock::release($other->db, 'molliepayments-mandate-reverification');
+    $other->db->close();
+    $ctx->mandateStatus = 'valid';
+    expect($ctx->payments->retryPendingMandates())->toBe(1);
+    $row = mollieAttempt($ctx);
+    $ctx->responses[Mollie\Api\Http\Requests\GetMandateRequest::class] = new Mollie\Api\Fake\MockResponse(['status' => 503, 'title' => 'Unavailable'], 503);
+    expect($ctx->payments->reverifyOnboarding($ctx->invoice->getId())['status'])->toBe('ready')
+        ->and(mollieAttempt($ctx)['mandate_verified_at'])->toBe($row['mandate_verified_at'])
+        ->and((int) $ctx->db->fetchOne("SELECT COUNT(*) FROM client_balance WHERE type = 'transaction'"))->toBe(1);
 });

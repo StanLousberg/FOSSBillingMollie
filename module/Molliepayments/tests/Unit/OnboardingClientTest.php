@@ -312,3 +312,48 @@ test('onboarding refuses a stale form after the saved payment mode changes', fun
     expect(fn () => $api->onboarding_start($params))->toThrow(Payment_Exception::class, 'authorization changed')
         ->and($ctx->requests)->toBeEmpty()->and($ctx->customerRequests)->toBeEmpty();
 });
+
+test('onboarding accepts native optional-cookie semantics while requiring the session nonce', function (string $cookie): void {
+    $ctx = mollieOnboarding(molliePaymentContext());
+    $params = mollieConsentParams($ctx);
+    $api = mollieClientApi($ctx, $params);
+    $ctx->di['request']->cookies->set(FOSSBilling\Core\Http\CookieNames::CSRF, $cookie);
+    expect($api->onboarding_start($params)['checkout_url'])->toContain('https://www.mollie.com/checkout/');
+})->with(['', 'disposable-nonce']);
+
+test('native session regeneration preserves nonce authorization for a logged-in owner', function (): void {
+    $ctx = mollieOnboarding(molliePaymentContext());
+    $params = mollieConsentParams($ctx);
+    $api = mollieClientApi($ctx, $params);
+    $session = new FOSSBilling\Core\Security\Session($ctx->di['session']);
+    $session->regenerateId();
+    expect($session->get('csrf_token'))->toBe('disposable-nonce')
+        ->and($api->onboarding_start($params)['checkout_url'])->toContain('https://www.mollie.com/checkout/');
+});
+
+test('matching browser form and cookie never authorize a different persisted session nonce', function (): void {
+    $ctx = mollieOnboarding(molliePaymentContext());
+    $params = mollieConsentParams($ctx);
+    $api = mollieClientApi($ctx, $params);
+    $ctx->di['request']->cookies->set(FOSSBilling\Core\Http\CookieNames::CSRF, 'disposable-nonce');
+    $ctx->di['session']->set('csrf_token', 'different-persisted-nonce');
+    expect(fn () => $api->onboarding_start($params))->toThrow(Payment_Exception::class, 'CSRF token invalid')
+        ->and($ctx->requests)->toBeEmpty()->and($ctx->customerRequests)->toBeEmpty();
+});
+
+test('authorization supports native JSON header and legacy-cookie nonce transport', function (string $transport): void {
+    $ctx = mollieOnboarding(molliePaymentContext());
+    $params = mollieConsentParams($ctx);
+    $api = mollieClientApi($ctx, $params);
+    if ($transport === 'legacy_cookie') {
+        $ctx->di['request']->cookies->set(FOSSBilling\Core\Http\CookieNames::LEGACY_CSRF, 'disposable-nonce');
+    } else {
+        $body = $transport === 'json' ? ['CSRFToken' => 'disposable-nonce'] : [];
+        $ctx->di['request'] = Symfony\Component\HttpFoundation\Request::create('/api/client/molliepayments/onboarding_start', 'POST', [], [], [], ['CONTENT_TYPE' => 'application/json'], json_encode($body));
+        if ($transport === 'header') {
+            $ctx->di['request']->headers->set('X-CSRF-TOKEN', 'disposable-nonce');
+        }
+    }
+    unset($params['CSRFToken']);
+    expect($api->onboarding_start($params)['checkout_url'])->toContain('https://www.mollie.com/checkout/');
+})->with(['json', 'header', 'legacy_cookie']);

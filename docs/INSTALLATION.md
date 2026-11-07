@@ -135,3 +135,8 @@ Module date fields now use native Doctrine DATETIME columns, stored in UTC as `Y
 The native MolliePayments gateway form now includes **Payment mode**: `both` (default), `one_time_only`, or `recurring_only`. Keep **Allow One Time Payments** enabled, including for recurring authorization: this pays an invoice with a first payment and does not enable native subscriptions. Disabled gateways and disallowed modes fail closed at checkout. The existing native encrypted credential store is unchanged. No schema upgrade is needed for this feature: consent source is retained in each new attempt's existing immutable request metadata; historical attempts are not backfilled.
 
 Themes without custom integration retain the normal flow. See [CUSTOM_CART_CHECKOUT.md](CUSTOM_CART_CHECKOUT.md) for the authenticated post-cart consent API, error/recovery rules, supported-host limitations and manual checks.
+
+
+## Read-only pending mandate verification
+
+The supported Core must also provide native `NamedLock::acquire()/release()` and `AfterAdminCronRunEvent` listener discovery. The active module uses that event to recheck at most five settled pending mandates, with a five-minute cooldown and seven-day horizon. It never schedules or creates recurring payments. No schema migration is introduced by this hardening. See [the final hardening review](PR18_HARDENING_REVIEW.md) for manual recovery and the reproduced host-native CSRF/session limitation.

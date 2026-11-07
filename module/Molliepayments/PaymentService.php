@@ -277,6 +277,36 @@ final class PaymentService
         return $this->onboarding($invoiceId);
     }
 
+    /** Bounded native-cron recovery: authenticated GET/reconciliation only, never checkout. */
+    public function retryPendingMandates(): int
+    {
+        $db = $this->attempts->connection;
+        $lock = 'molliepayments-mandate-reverification';
+        if ($db->isTransactionActive() || !\FOSSBilling\Core\Doctrine\NamedLock::acquire($db, $lock, 0)) {
+            return 0;
+        }
+        $count = 0;
+        try {
+            $rows = $db->fetchAllAssociative("SELECT id, payment_id FROM molliepayments_attempt WHERE status = 'paid' AND onboarding_status = 'pending_mandate' AND settled_transaction_id IS NOT NULL AND payment_id IS NOT NULL AND updated_at < ? AND created_at >= ? AND (lease IS NULL OR lease_until < ?) ORDER BY updated_at, id LIMIT 5", [Support\Timestamps::now(-300), Support\Timestamps::now(-604800), Support\Timestamps::now()]);
+            foreach ($rows as $row) {
+                // Back off even if payment retrieval fails before mandate verification.
+                if ($db->executeStatement('UPDATE molliepayments_attempt SET updated_at = ? WHERE id = ? AND (lease IS NULL OR lease_until < ?)', [Support\Timestamps::now(), $row['id'], Support\Timestamps::now()]) !== 1) {
+                    continue;
+                }
+                ++$count;
+                try {
+                    $this->reconcile($row['id'], $row['payment_id']);
+                } catch (\Throwable) {
+                    $this->di['logger']->warning('MolliePayments mandate recovery unavailable; attempt {attempt_id}.', ['attempt_id' => $row['id']]);
+                }
+            }
+        } finally {
+            \FOSSBilling\Core\Doctrine\NamedLock::release($db, $lock);
+        }
+
+        return $count;
+    }
+
     private function ownedInvoice(int $invoiceId): Invoice
     {
         $identity = $this->di['loggedin_client'] ?? null;
@@ -866,7 +896,7 @@ final class PaymentService
             throw new \Payment_Exception('MolliePayments is not enabled for invoice payments.', [], 409);
         }
         if (!$mode->allows($sequence)) {
-            throw new \Payment_Exception('This payment type is disabled by the MolliePayments payment mode. Return to your invoice or contact support.', [], 409);
+            throw new \Payment_Exception($mode === PaymentMode::RecurringOnly ? 'MolliePayments requires sign-in and explicit authorization for one eligible recurring order. One-time, mixed and unsupported invoices need another payment gateway.' : 'Recurring authorization is disabled for MolliePayments. Choose Pay once or another payment gateway.', [], 409);
         }
     }
 

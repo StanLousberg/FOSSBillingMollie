@@ -11,6 +11,7 @@ final class Compatibility
     {
         $requirements = [
             \FOSSBilling\Core\Doctrine\SchemaSynchronizer::class => ['syncEntities'],
+            \FOSSBilling\Core\Doctrine\NamedLock::class => ['acquire', 'release'],
             \FOSSBilling\Core\Http\PaymentReturn::class => ['createResponse'],
             \Box\Mod\Client\ServiceBalance::class => ['getClientBalanceForUpdate'],
             \Box\Mod\Invoice\ServiceTransaction::class => ['claimForProcessing', 'createAndProcess'],

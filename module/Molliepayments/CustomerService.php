@@ -116,7 +116,7 @@ final class CustomerService
         $this->assertCredential($row, $key);
         $lease = bin2hex(random_bytes(16));
         if (!$this->customers->acquire($row['id'], $lease)) {
-            throw new \Payment_Exception('Customer operation already in progress. Retry later.');
+            throw new Support\ProviderUnavailableException('Customer operation already in progress. Retry later.', [], 409);
         }
         try {
             $row = $this->customers->find($clientId, $gatewayId, $environment);
@@ -155,6 +155,9 @@ final class CustomerService
                 $this->customers->update($row['id'], $lease, ['customer_id' => $customer->id, 'status' => 'ready', 'error' => null]);
 
                 return $customer->id;
+            } catch (Support\ProviderUnavailableException $error) {
+                $this->customers->update($row['id'], $lease, ['error' => 'provider_unavailable']);
+                throw $error;
             } catch (\Throwable) {
                 $this->customers->update($row['id'], $lease, ['error' => 'verification_or_provider_error', 'status' => $row['customer_id'] === null ? 'creating' : 'blocked']);
                 throw new \Payment_Exception('Customer operation unavailable or unverified. The mapping is preserved; retry safely or use operator recovery.');
@@ -200,9 +203,14 @@ final class CustomerService
     {
         try {
             return $request();
+        } catch (\Mollie\Api\Exceptions\ApiException $error) {
+            if (!in_array($error->getStatusCode(), [408, 429], true) && $error->getStatusCode() < 500) {
+                throw new \Payment_Exception('Mollie Customer request was rejected. Verify the saved context.');
+            }
+            throw new Support\ProviderUnavailableException('Mollie Customer service temporarily unavailable. The mapping is preserved; retry safely later.', [], 503);
         } catch (\Throwable) {
             // Never chain SDK exceptions: their requests may contain secrets or personal data.
-            throw new \Payment_Exception('Mollie Customer service unavailable. Retry safely later.');
+            throw new Support\ProviderUnavailableException('Mollie Customer service temporarily unavailable. The mapping is preserved; retry safely later.', [], 503);
         }
     }
 }
