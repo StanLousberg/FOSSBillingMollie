@@ -11,7 +11,9 @@
             <h1 class="h3 mb-3">Recurring payments</h1>
 
             <p class="mb-4">
-                {% if onboarding.payment_mode == 'both' %}
+                {% if onboarding.historical_authorization %}
+                Review the original authorization and the current eligibility of each order.
+                {% elseif onboarding.payment_mode == 'both' %}
                 Choose how you want to pay for your invoice.
                 With <strong>Pay once</strong>, you pay this invoice
                 and manually pay each future renewal invoice.
@@ -31,13 +33,27 @@
 
                 <div class="card-body">
                     <dl class="row mb-0">
-                        <dt class="col-sm-4">Recurring products</dt>
+                        <dt class="col-sm-4">{{ onboarding.historical_authorization ? 'Originally authorized products' : 'Recurring products' }}</dt>
                         <dd class="col-sm-8 text-break">
                             <ul class="list-unstyled mb-0">
-                                {% for order in onboarding.recurring_orders %}
+                                {% for order in (onboarding.historical_authorization ? onboarding.authorized_orders : onboarding.recurring_orders) %}
                                 <li class="mb-2">
                                     {{ order.order_title }} (#{{ order.order_id }})<br>
-                                    <span class="text-secondary">{{ order.period_title }} · {{ order.recurring_amount }} {{ order.recurring_currency }} excluding tax</span>
+                                    <span class="text-secondary">{{ order.period_title }}{% if order.recurring_amount is defined %} · {{ order.recurring_amount }} {{ order.recurring_currency }} excluding tax{% if onboarding.historical_authorization %} at authorization{% endif %}{% endif %}</span>
+                                    {% if onboarding.historical_authorization %}
+                                        {% set reasons = {
+                                            'missing_order': 'Order no longer exists.',
+                                            'owner_changed': 'Order ownership changed.',
+                                            'period_changed': 'Renewal interval changed; new consent is required for that interval.',
+                                            'order_unavailable': 'Order canceled or inactive.',
+                                            'cancellation_scheduled': 'Cancellation scheduled at the end of the period.',
+                                            'currency_changed': 'Order currency changed.',
+                                            'product_changed': 'The product assigned to this order changed.'
+                                        } %}
+                                        <div class="{{ order.applicable ? 'text-success' : 'text-secondary' }}">
+                                            {{ order.applicable ? 'Currently eligible at the original interval.' : reasons[order.exclusion_reason]|default('Not currently covered.') }}
+                                        </div>
+                                    {% endif %}
                                 </li>
                                 {% endfor %}
                             </ul>
@@ -78,12 +94,24 @@
                 </div>
             </div>
 
+            {% if onboarding.historical_authorization and onboarding.original_consent_text %}
+                <details class="mb-3">
+                    <summary>Original consent ({{ onboarding.original_consent_version }})</summary>
+                    <p class="mt-2 mb-1 text-break">{{ onboarding.original_consent_text }}</p>
+                    <p class="small text-secondary">Accepted {{ onboarding.consent_accepted_at }}</p>
+                </details>
+                <p class="small text-secondary">Current eligibility applies only to the original order IDs. Automatic recurring collection remains disabled.</p>
+                {% if onboarding.applicable_orders is empty %}
+                <p class="text-secondary" role="status">None of the originally authorized orders is currently eligible for future collection.</p>
+                {% endif %}
+            {% endif %}
+
             {% set messages = {
                 'pending_payment': 'A payment has already started. Please check the existing payment before continuing.',
                 'existing_payment': 'A one-time payment already exists. Return to your invoice to continue.',
                 'paid': 'This invoice has been paid. No further payment is needed.',
                 'pending_mandate': 'Your payment is complete. We are verifying your payment authorization.',
-                'ready': 'Your payment and authorization have been verified.',
+                'ready': onboarding.historical_authorization ? 'Your payment and mandate have been verified.' : 'Your payment and authorization have been verified.',
                 'payment_failed': 'Your previous payment was unsuccessful. You can try again.',
                 'mandate_invalid': 'Your payment is complete, but authorization could not be verified. Please contact support.',
                 'manual_review': 'This payment requires review. Please contact support before trying again.'

@@ -41,13 +41,11 @@ final class MandateService
         $category = 'pending';
         try {
             $payload = json_decode($attempt['request'], true, 512, JSON_THROW_ON_ERROR);
-            if ($attempt['status'] !== 'paid' || $attempt['consent_text'] === null || $attempt['consent_accepted_at'] === null
-                || $payload['sequenceType'] !== 'first' || $payment->id !== $attempt['payment_id']
-                || $payment->customerId !== $payload['customerId'] || $payment->mode !== $attempt['environment']
-                || !isset($payment->profileId) || $payment->profileId !== $payload['metadata']['profile_id']) {
+            $payments = new PaymentService($this->di, $this->clientFactory);
+            $payments->assertAuthorization($attempt);
+            if ($attempt['status'] !== 'paid' || $payments->validatePayment($attempt, $payment) !== 'paid') {
                 throw new \UnexpectedValueException();
             }
-            (new PaymentService($this->di, $this->clientFactory))->assertAuthorization($attempt);
             (new CustomerService($this->di, $this->clientFactory))->verifyOnboardingCustomer($attemptId);
             $method = $payment->method instanceof \BackedEnum ? $payment->method->value : $payment->method;
             $expected = match ($method) {

@@ -117,7 +117,7 @@ function mollieRenderOnboarding(array $data = []): string
     $twig->addGlobal('app_area', 'client');
 
     return $twig->render('mod_molliepayments_onboarding.html.twig', ['CSRFToken' => 'disposable-nonce',
-        'onboarding' => $data + ['recurring_orders' => [['order_id' => '7', 'order_title' => 'Recurring service', 'period_title' => 'Every month', 'recurring_amount' => '20.00', 'recurring_currency' => 'EUR']], 'one_time_orders' => [], 'one_time_lines' => [], 'payment_mode' => 'both', 'can_authorize' => true, 'can_pay_once' => true, 'company_name' => 'Example Hosting', 'recurring_amount' => '20.00', 'recurring_currency' => 'EUR', 'order_id' => '7', 'order_title' => 'Recurring service', 'period_title' => 'Every month', 'amount' => '12.34', 'currency' => 'EUR', 'can_resume' => false, 'can_pay' => true, 'can_verify' => true, 'scope_hash' => 'disposable-scope', 'consent_digest' => 'disposable-digest', 'invoice_id' => 1, 'invoice_hash' => 'disposable', 'status' => 'not_started', 'consent_version' => PaymentService::CONSENT_VERSION, 'consent_notice_text' => sprintf(PaymentService::CONSENT_TEXT, 'Example Hosting'), 'consent_text' => sprintf(PaymentService::CONSENT_TEXT, 'Example Hosting')]]);
+        'onboarding' => $data + ['historical_authorization' => false, 'recurring_orders' => [['order_id' => '7', 'order_title' => 'Recurring service', 'period_title' => 'Every month', 'recurring_amount' => '20.00', 'recurring_currency' => 'EUR']], 'one_time_orders' => [], 'one_time_lines' => [], 'payment_mode' => 'both', 'can_authorize' => true, 'can_pay_once' => true, 'company_name' => 'Example Hosting', 'recurring_amount' => '20.00', 'recurring_currency' => 'EUR', 'order_id' => '7', 'order_title' => 'Recurring service', 'period_title' => 'Every month', 'amount' => '12.34', 'currency' => 'EUR', 'can_resume' => false, 'can_pay' => true, 'can_verify' => true, 'scope_hash' => 'disposable-scope', 'consent_digest' => 'disposable-digest', 'invoice_id' => 1, 'invoice_hash' => 'disposable', 'status' => 'not_started', 'consent_version' => PaymentService::CONSENT_VERSION, 'consent_notice_text' => sprintf(PaymentService::CONSENT_TEXT, 'Example Hosting'), 'consent_text' => sprintf(PaymentService::CONSENT_TEXT, 'Example Hosting')]]);
 }
 
 test('client template renders native filters CSRF and an unchecked explicit consent control', function (): void {
@@ -380,3 +380,43 @@ test('multi-order page separates intervals and one-time products with escaped ex
         ->and($xpath->evaluate('normalize-space(//label[@for="molliepayments-consent"])'))->not->toContain($once->getTitle(), 'Native setup fee')
         ->and($xpath->query('//input[@name="scope_hash" and @value="' . $page['scope_hash'] . '"]')->length)->toBe(1);
 });
+
+test('historical Bootstrap page remains accessible and distinguishes partial or complete exclusion', function (string $change): void {
+    require_once dirname(__DIR__) . '/AuthorizationLifecycleContext.php';
+    $ctx = mollieOnboarding(molliePaymentContext());
+    $annual = mollieExtraOrder($ctx, '1Y');
+    mollieFirst($ctx);
+    $ctx->status = 'paid';
+    mollieWebhook($ctx);
+    $text = mollieAttempt($ctx)['consent_text'];
+    if ($change === 'period') {
+        $annual->setPeriod('2Y');
+    } elseif ($change === 'scheduled') {
+        mollieScheduleOrderCancellation($ctx, $annual);
+    } else {
+        $annual->setStatus(Box\Mod\Order\Entity\Order::STATUS_CANCELED);
+        if ($change === 'all') {
+            $ctx->order->setStatus(Box\Mod\Order\Entity\Order::STATUS_CANCELED);
+        }
+    }
+    $ctx->em->flush();
+    $page = $ctx->payments->onboarding($ctx->invoice->getId());
+    $html = mollieRenderOnboarding($page);
+    $document = new DOMDocument();
+    @$document->loadHTML($html);
+    $xpath = new DOMXPath($document);
+    expect($html)->toContain('Originally authorized products', 'Original consent (order-collection-v4)', 'Your payment and mandate have been verified.')
+        ->and($xpath->evaluate('normalize-space(//details/p[1])'))->toBe($text)
+        ->and($xpath->query('//form[@id="molliepayments-onboarding" or @id="molliepayments-oneoff" or @id="molliepayments-resume"]')->length)->toBe(0)
+        ->and($xpath->query('//form[@id="molliepayments-verify"]')->length)->toBe(1)
+        ->and($xpath->query('//style | //*[@style]')->length)->toBe(0);
+    if ($change === 'all') {
+        expect($html)->toContain('None of the originally authorized orders is currently eligible for future collection.')
+            ->not->toContain('Currently eligible at the original interval.');
+    } else {
+        expect($html)->toContain('Currently eligible at the original interval.');
+    }
+    if ($change === 'period') {
+        expect($html)->toContain('Renewal interval changed; new consent is required for that interval.');
+    }
+})->with(['canceled', 'scheduled', 'period', 'all']);

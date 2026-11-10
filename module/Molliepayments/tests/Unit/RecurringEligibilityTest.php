@@ -82,11 +82,12 @@ test('one time order uses native checkout without authorization', function (): v
         ->and($ctx->payload['sequenceType'])->toBe('oneoff')->and($ctx->customerRequests)->toBeEmpty();
 });
 
-test('stored consent is scoped to one order and cannot follow a reassigned invoice item', function (): void {
+test('unresolved creation cannot replay after an invoice item is reassigned', function (): void {
     $ctx = mollieOnboarding(molliePaymentContext());
     $page = $ctx->payments->onboarding($ctx->invoice->getId());
     mollieFirst($ctx);
     $attempt = mollieAttempt($ctx);
+    $ctx->db->update('molliepayments_attempt', ['payment_id' => null, 'status' => 'creating'], ['id' => $attempt['id']]);
     expect($attempt['consent_text'])->toBe($page['consent_text'])
         ->and(json_decode($attempt['consent_scope'], true)['scope']['recurring_orders'][0])->toMatchArray(['order_id' => (string) $ctx->order->getId(), 'period' => '1M'])
         ->and($ctx->payload['metadata']['scope_hash'])->toBe($page['scope_hash']);
