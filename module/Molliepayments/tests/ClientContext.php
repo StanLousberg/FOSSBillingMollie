@@ -33,5 +33,5 @@ function mollieSetPaymentMode(object $ctx, string $mode): void
 
 function mollieCartParams(object $ctx): array
 {
-    return $ctx->payments->consentNotice() + ['CSRFToken' => 'disposable-nonce', 'consent' => '1', 'invoice_hash' => $ctx->invoice->getHash()];
+    return $ctx->payments->consentNotice($ctx->invoice->getId()) + ['CSRFToken' => 'disposable-nonce', 'consent' => '1', 'invoice_hash' => $ctx->invoice->getHash()];
 }

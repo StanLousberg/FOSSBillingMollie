@@ -8,7 +8,7 @@ require_once dirname(__DIR__) . '/ClientContext.php';
 
 function mollieConsentParams(object $ctx): array
 {
-    return ['CSRFToken' => 'disposable-nonce', 'consent' => '1', 'consent_digest' => $ctx->payments->onboarding($ctx->invoice->getId())['consent_digest'], 'consent_version' => PaymentService::CONSENT_VERSION, 'invoice_id' => $ctx->invoice->getId()];
+    return ['scope_hash' => $ctx->payments->onboarding($ctx->invoice->getId())['scope_hash'], 'CSRFToken' => 'disposable-nonce', 'consent' => '1', 'consent_digest' => $ctx->payments->onboarding($ctx->invoice->getId())['consent_digest'], 'consent_version' => PaymentService::CONSENT_VERSION, 'invoice_id' => $ctx->invoice->getId()];
 }
 
 test('client API accepts the native session nonce after the dispatcher strips it from parameters', function (): void {
@@ -117,7 +117,7 @@ function mollieRenderOnboarding(array $data = []): string
     $twig->addGlobal('app_area', 'client');
 
     return $twig->render('mod_molliepayments_onboarding.html.twig', ['CSRFToken' => 'disposable-nonce',
-        'onboarding' => $data + ['payment_mode' => 'both', 'can_authorize' => true, 'can_pay_once' => true, 'company_name' => 'Example Hosting', 'recurring_amount' => '20.00', 'recurring_currency' => 'EUR', 'order_id' => '7', 'order_title' => 'Recurring service', 'period_title' => 'Every month', 'amount' => '12.34', 'currency' => 'EUR', 'can_resume' => false, 'can_pay' => true, 'can_verify' => true, 'consent_digest' => 'disposable-digest', 'invoice_id' => 1, 'invoice_hash' => 'disposable', 'status' => 'not_started', 'consent_version' => PaymentService::CONSENT_VERSION, 'consent_text' => sprintf(PaymentService::CONSENT_TEXT, 'Example Hosting')]]);
+        'onboarding' => $data + ['recurring_orders' => [['order_id' => '7', 'order_title' => 'Recurring service', 'period_title' => 'Every month', 'recurring_amount' => '20.00', 'recurring_currency' => 'EUR']], 'one_time_orders' => [], 'one_time_lines' => [], 'payment_mode' => 'both', 'can_authorize' => true, 'can_pay_once' => true, 'company_name' => 'Example Hosting', 'recurring_amount' => '20.00', 'recurring_currency' => 'EUR', 'order_id' => '7', 'order_title' => 'Recurring service', 'period_title' => 'Every month', 'amount' => '12.34', 'currency' => 'EUR', 'can_resume' => false, 'can_pay' => true, 'can_verify' => true, 'scope_hash' => 'disposable-scope', 'consent_digest' => 'disposable-digest', 'invoice_id' => 1, 'invoice_hash' => 'disposable', 'status' => 'not_started', 'consent_version' => PaymentService::CONSENT_VERSION, 'consent_notice_text' => sprintf(PaymentService::CONSENT_TEXT, 'Example Hosting'), 'consent_text' => sprintf(PaymentService::CONSENT_TEXT, 'Example Hosting')]]);
 }
 
 test('client template renders native filters CSRF and an unchecked explicit consent control', function (): void {
@@ -326,6 +326,7 @@ test('native session regeneration preserves nonce authorization for a logged-in 
     $params = mollieConsentParams($ctx);
     $api = mollieClientApi($ctx, $params);
     $session = new FOSSBilling\Core\Security\Session($ctx->di['session']);
+    $session->setDi(Tests\Helpers\container());
     $session->regenerateId();
     expect($session->get('csrf_token'))->toBe('disposable-nonce')
         ->and($api->onboarding_start($params)['checkout_url'])->toContain('https://www.mollie.com/checkout/');
@@ -357,3 +358,25 @@ test('authorization supports native JSON header and legacy-cookie nonce transpor
     unset($params['CSRFToken']);
     expect($api->onboarding_start($params)['checkout_url'])->toContain('https://www.mollie.com/checkout/');
 })->with(['json', 'header', 'legacy_cookie']);
+
+test('multi-order page separates intervals and one-time products with escaped explicit scope', function (): void {
+    require_once dirname(__DIR__) . '/MultiOrderContext.php';
+    $ctx = mollieOnboarding(molliePaymentContext());
+    $annual = mollieExtraOrder($ctx, '1Y');
+    $annual->setTitle('Annual <service>');
+    $once = mollieExtraOrder($ctx, null);
+    mollieExtraLine($ctx, 'setup');
+    $ctx->em->flush();
+    $page = $ctx->payments->onboarding($ctx->invoice->getId());
+    $html = mollieRenderOnboarding($page);
+    $document = new DOMDocument();
+    @$document->loadHTML($html);
+    $xpath = new DOMXPath($document);
+    expect($html)->toContain('Recurring products', 'One-time products', 'Annual &lt;service&gt;', 'Excluded from future automatic payments.')
+        ->not->toContain('<service>')
+        ->and($xpath->evaluate('normalize-space(//dt[text()="Recurring products"]/following-sibling::dd[1])'))
+        ->toContain($ctx->order->getTitle(), $annual->getTitle(), (new FOSSBilling\Core\Period('1M'))->getTitle(), (new FOSSBilling\Core\Period('1Y'))->getTitle())
+        ->and($xpath->evaluate('normalize-space(//dt[text()="One-time products"]/following-sibling::dd[1])'))->toContain($once->getTitle(), 'Native setup fee')
+        ->and($xpath->evaluate('normalize-space(//label[@for="molliepayments-consent"])'))->not->toContain($once->getTitle(), 'Native setup fee')
+        ->and($xpath->query('//input[@name="scope_hash" and @value="' . $page['scope_hash'] . '"]')->length)->toBe(1);
+});

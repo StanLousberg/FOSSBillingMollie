@@ -23,18 +23,24 @@ final class Client extends AbstractApi
         $consent = $this->authorizationConsent($data);
 
         $page = $this->getService()->payments()->onboarding($this->invoiceId($data));
-        if (!is_string($data['consent_digest'] ?? null) || !hash_equals($page['consent_digest'], $data['consent_digest'])) {
+        if (!is_string($data['consent_digest'] ?? null) || !hash_equals($page['consent_digest'], $data['consent_digest'])
+            || !is_string($data['scope_hash'] ?? null) || !hash_equals($page['scope_hash'], $data['scope_hash'])) {
             throw new \Payment_Exception('Order authorization changed. Reload the onboarding page.', [], 409);
         }
 
-        return ['checkout_url' => $this->getService()->payments()->firstCheckout($this->invoiceId($data), $consent)];
+        return ['checkout_url' => $this->getService()->payments()->firstCheckout($this->invoiceId($data), $consent, 'onboarding', $data['consent_digest'])];
     }
 
     public function consent_notice(array $data): array
     {
         $this->authorizeIdentity();
 
-        return $this->getService()->payments()->consentNotice();
+        $hash = $data['invoice_hash'] ?? null;
+        if ($hash !== null && (!is_string($hash) || !preg_match('/^[a-f0-9]{32,64}$/D', $hash))) {
+            throw new \Payment_Exception('Invalid invoice hash.', [], 400);
+        }
+
+        return $this->getService()->payments()->consentNotice($hash ?? $this->invoiceId($data));
     }
 
     public function cart_checkout(array $data): array
@@ -42,11 +48,11 @@ final class Client extends AbstractApi
         $this->authorizeWrite();
         $consent = $this->authorizationConsent($data);
         $hash = $data['invoice_hash'] ?? null;
-        if (!is_string($hash) || !preg_match('/^[a-f0-9]{32,64}$/D', $hash) || !is_string($data['consent_digest'] ?? null)) {
+        if (!is_string($hash) || !preg_match('/^[a-f0-9]{32,64}$/D', $hash) || !is_string($data['consent_digest'] ?? null) || !is_string($data['scope_hash'] ?? null)) {
             throw new \Payment_Exception('Invalid invoice hash or consent digest.', [], 400);
         }
 
-        return ['checkout_url' => $this->getService()->payments()->cartCheckout($hash, $consent, $data['consent_digest'])];
+        return ['checkout_url' => $this->getService()->payments()->cartCheckout($hash, $consent, $data['consent_digest'], $data['scope_hash'])];
     }
 
     private function authorizationConsent(array $data): bool

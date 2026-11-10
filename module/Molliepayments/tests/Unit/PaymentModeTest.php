@@ -99,4 +99,4 @@ test('disallowed payment modes explain the required alternative without starting
         : fn () => mollieFirst($ctx);
     expect($run)->toThrow(Payment_Exception::class, $message)
         ->and($ctx->requests)->toBeEmpty()->and($ctx->customerRequests)->toBeEmpty();
-})->with([['recurring_only', 'One-time, mixed and unsupported invoices need another payment gateway'], ['one_time_only', 'Choose Pay once']]);
+})->with([['recurring_only', 'One-time-only and unsupported invoices need another payment gateway'], ['one_time_only', 'Choose Pay once']]);

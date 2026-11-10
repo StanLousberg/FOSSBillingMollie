@@ -26,9 +26,10 @@ use Mollie\Api\Resources\Payment;
 /** Checkout and authenticated reconciliation; the host remains the accounting authority. */
 final class PaymentService
 {
-    public const CONSENT_VERSION = 'order-collection-v3';
+    public const CONSENT_VERSION = 'order-collection-v4';
+    private const V3_CONSENT_TEXT = 'I authorize %s to collect future renewal payments for this order through the payment method I select during Mollie checkout. Amounts will be based on the actual renewal invoices.';
     private const LEGACY_CONSENT_TEXT = 'I authorize future automatic collection through Mollie only for renewal invoices of the recurring order identified above. Amounts will be based on the actual invoices. I will complete this first payment using the account or card to authorize. Automatic collection is not enabled by this release.';
-    public const CONSENT_TEXT = 'I authorize %s to collect future renewal payments for this order through the payment method I select during Mollie checkout. Amounts will be based on the actual renewal invoices.';
+    public const CONSENT_TEXT = 'I authorize %s to collect future renewal payments only for the recurring orders listed above through the payment method I select during Mollie checkout. Each order keeps its stated interval; amounts follow actual renewal invoices. One-time products, setup fees and first-invoice discounts are excluded.';
 
     private const TERMINAL_STATUSES = ['failed', 'canceled', 'expired'];
 
@@ -64,8 +65,10 @@ final class PaymentService
         }
         $invoice = $this->ownedInvoice($invoiceId);
         $scope = $this->recurringScope($invoice);
-        if ($source === 'cart_checkout' && ($noticeDigest === null || !hash_equals(hash('sha256', self::CONSENT_VERSION . ':' . sprintf(self::CONSENT_TEXT, $scope['company_name'])), $noticeDigest))) {
-            throw new \Payment_Exception('Authorization text changed. Review the cart consent again.', [], 409);
+        $context = $this->authorizationContext($invoice, $scope);
+        if (($source === 'cart_checkout' || $noticeDigest !== null)
+            && ($noticeDigest === null || !hash_equals($this->consentDigest($context), $noticeDigest))) {
+            throw new \Payment_Exception('Authorization text changed. Order authorization changed; review the consent again.', [], 409);
         }
         if (!$consent) {
             throw new \Payment_Exception('Explicit authorization is required. You can still use ordinary one-time checkout.', [], 400);
@@ -94,21 +97,23 @@ final class PaymentService
             throw new \Payment_Exception('Customer context changed. Retry safely.');
         }
 
-        return $this->checkoutPayment($invoiceId, (int) $gateway->getId(), $mapping + ['consent_scope' => $scope, 'consent_source' => $source]);
+        return $this->checkoutPayment($invoiceId, (int) $gateway->getId(), $mapping + ['consent_scope' => $context, 'consent_source' => $source]);
     }
 
-    /** Themes show this notice before native cart checkout; acceptance is posted afterwards. */
-    public function consentNotice(): array
+    /** Exact invoice-backed notice after native cart checkout and before explicit acceptance. */
+    public function consentNotice(int|string $invoiceId): array
     {
-        $company = (string) ($this->di['mod_service']('System')->getCompany()['name'] ?? '');
-        $text = sprintf(self::CONSENT_TEXT, $company);
+        if (is_string($invoiceId)) {
+            $invoice = $this->invoiceService()->getInvoiceRepository()->findByHash($invoiceId)
+                ?? throw new \Payment_Exception('Invoice not found.', [], 404);
+            $invoiceId = (int) $invoice->getId();
+        }
 
-        return ['consent_version' => self::CONSENT_VERSION, 'consent_text' => $text,
-            'consent_digest' => hash('sha256', self::CONSENT_VERSION . ':' . $text)];
+        return $this->onboarding($invoiceId);
     }
 
     /** The native cart has already created the invoice; never create orders or infer consent. */
-    public function cartCheckout(string $hash, bool $consent, string $digest): ?string
+    public function cartCheckout(string $hash, bool $consent, string $digest, string $scopeHash): ?string
     {
         $invoice = $this->invoiceService()->getInvoiceRepository()->findByHash($hash)
             ?? throw new \Payment_Exception('Invoice not found.', [], 404);
@@ -116,6 +121,11 @@ final class PaymentService
         $gateways = $this->di['em']->getRepository(PayGateway::class)->findBy(['gateway' => 'MolliePayments']);
         if (count($gateways) !== 1 || $invoice->getGateway()?->getId() !== $gateways[0]->getId()) {
             throw new \Payment_Exception('The invoice must select the unique MolliePayments gateway.', [], 409);
+        }
+
+        $page = $this->onboarding((int) $invoice->getId());
+        if (!hash_equals($page['scope_hash'], $scopeHash)) {
+            throw new \Payment_Exception('Order authorization changed. Reload the checkout page.', [], 409);
         }
 
         return $this->firstCheckout((int) $invoice->getId(), $consent, 'cart_checkout', $digest);
@@ -127,8 +137,9 @@ final class PaymentService
         $invoice = $this->ownedInvoice($invoiceId);
         $scope = $this->recurringScope($invoice);
         $attempt = $this->attempts->connection->fetchAssociative(
-            'SELECT * FROM molliepayments_attempt WHERE invoice_id = ? ORDER BY CASE WHEN active_invoice IS NOT NULL THEN 0 ELSE 1 END, created_at DESC, id DESC LIMIT 1', [$invoiceId]
+            'SELECT id FROM molliepayments_attempt WHERE invoice_id = ? ORDER BY CASE WHEN active_invoice IS NOT NULL THEN 0 ELSE 1 END, created_at DESC, id DESC LIMIT 1', [$invoiceId]
         );
+        $attempt = $attempt ? $this->attempts->find($attempt['id']) : false;
         $status = $attempt['onboarding_status'] ?? 'not_started';
         $canPay = $invoice->isIssued() && $invoice->getStatus() === Invoice::STATUS_UNPAID && $invoice->getReplacedByInvoiceId() === null
             && ($attempt === false || in_array($attempt['status'], self::TERMINAL_STATUSES, true));
@@ -144,6 +155,16 @@ final class PaymentService
             $status = 'existing_payment';
         }
 
+        if ($attempt && $attempt['consent_version'] !== null && !in_array($attempt['status'], self::TERMINAL_STATUSES, true)) {
+            try {
+                $this->assertAuthorization($attempt);
+            } catch (\Payment_Exception) {
+                // A read never rewrites evidence or advertises a changed scope as ready.
+                $status = 'manual_review';
+                $canPay = false;
+            }
+        }
+
         $gateways = $this->di['em']->getRepository(PayGateway::class)->findBy(['gateway' => 'MolliePayments']);
         if (count($gateways) !== 1) {
             throw new \Payment_Exception('Exactly one MolliePayments gateway must be configured for onboarding.');
@@ -151,23 +172,31 @@ final class PaymentService
         [$gateway] = $this->gateway((int) $gateways[0]->getId());
         $mode = $this->paymentMode($gateway);
         $enabled = $gateway->isEnabled() && $gateway->isAllowSingle();
-        $recurring = $this->recurringPrice($scope);
+        $context = $this->authorizationContext($invoice, $scope);
         $amount = Amount::fromHost($this->invoiceService()->getTotalWithTax($invoice));
 
-        return $scope + $recurring + ['payment_mode' => $mode->value,
+        return $scope + ['payment_mode' => $mode->value,
             'can_authorize' => $enabled && $mode->allows('first'), 'can_pay_once' => $enabled && $mode->allows('oneoff'), 'invoice_id' => $invoiceId, 'invoice_hash' => $invoice->getHash(), 'status' => $status,
             'amount' => $amount, 'currency' => $invoice->getCurrency(),
             'can_pay' => $canPay, 'can_resume' => $enabled && !$canPay && $attempt && $attempt['status'] === 'open' && $attempt['error'] === null && $status !== 'manual_review' && $attempt['payment_id'] !== null && $mode->allows($attempt['consent_version'] === null ? 'oneoff' : 'first'), 'can_verify' => $attempt && $attempt['consent_version'] !== null && $attempt['payment_id'] !== null,
-            'consent_digest' => hash('sha256', json_encode([$invoiceId, self::CONSENT_VERSION, $this->consentText($scope), $recurring, $amount, $invoice->getCurrency(), $mode->value], JSON_THROW_ON_ERROR)),
+            'scope_hash' => $this->scopeHash($context), 'consent_digest' => $this->consentDigest($context),
+            'consent_notice_text' => sprintf(self::CONSENT_TEXT, $scope['company_name']),
             'consent_text' => $this->consentText($scope), 'consent_version' => self::CONSENT_VERSION];
     }
 
     private function recurringScope(Invoice $invoice): array
     {
         $scope = Support\RecurringEligibility::scope($this->di['em'], $invoice)
-            ?? throw new \Payment_Exception('Mandate authorization requires an invoice containing only one eligible recurring order.', [], 403);
+            ?? throw new \Payment_Exception('Mandate authorization requires an invoice with at least one eligible recurring order and no invalid order references.', [], 403);
 
-        return $scope + ['company_name' => (string) ($this->di['mod_service']('System')->getCompany()['name'] ?? '')];
+        foreach ($scope['recurring_orders'] as &$order) {
+            $order += $this->recurringPrice($order);
+        }
+        unset($order);
+        // Retain the read-only single-order presentation fields for existing integrations.
+        $single = count($scope['recurring_orders']) === 1 ? $scope['recurring_orders'][0] : [];
+
+        return $scope + $single + ['company_name' => (string) ($this->di['mod_service']('System')->getCompany()['name'] ?? '')];
     }
 
     /** Read-only composition of the same renewal line and promo resolvers used by Core. */
@@ -186,13 +215,92 @@ final class PaymentService
 
     private function consentText(array $scope, string $version = self::CONSENT_VERSION): string
     {
+        if ($version === self::CONSENT_VERSION) {
+            $orders = array_map(static fn (array $order): string => 'Order #' . $order['order_id'] . ' (' . $order['order_title'] . '), ' . $order['period_title'], $scope['recurring_orders']);
+
+            return implode('; ', $orders) . '. ' . sprintf(self::CONSENT_TEXT, $scope['company_name']);
+        }
         $text = match ($version) {
-            self::CONSENT_VERSION => sprintf(self::CONSENT_TEXT, $scope['company_name']),
+            'order-collection-v3' => sprintf(self::V3_CONSENT_TEXT, $scope['company_name']),
             'order-collection-v2' => self::LEGACY_CONSENT_TEXT,
             default => throw new \Payment_Exception('Unknown authorization version. Contact support.', [], 409),
         };
 
         return 'Order #' . $scope['order_id'] . ' (' . $scope['order_title'] . '), ' . $scope['period_title'] . '. ' . $text;
+    }
+
+    private function authorizationContext(Invoice $invoice, array $scope): array
+    {
+        $gateways = $this->di['em']->getRepository(PayGateway::class)->findBy(['gateway' => 'MolliePayments']);
+        if (count($gateways) !== 1) {
+            throw new \Payment_Exception('Exactly one MolliePayments gateway must be configured for onboarding.');
+        }
+        [$gateway, $environment] = $this->gateway((int) $gateways[0]->getId());
+
+        return ['scope' => $scope, 'invoice_id' => (string) $invoice->getId(), 'client_id' => (string) $invoice->getClientId(),
+            'invoice_hash' => $invoice->getHash(), 'amount' => Amount::fromHost($this->invoiceService()->getTotalWithTax($invoice)),
+            'currency' => $invoice->getCurrency(), 'taxrate' => $invoice->getTaxrate(),
+            'gateway_id' => (string) $gateway->getId(), 'environment' => $environment,
+            'payment_mode' => $this->paymentMode($gateway)->value, 'version' => self::CONSENT_VERSION,
+            'text' => $this->consentText($scope)];
+    }
+
+    private function scopeHash(array $context): string
+    {
+        return hash('sha256', json_encode($context, JSON_THROW_ON_ERROR));
+    }
+
+    private function consentDigest(array $context): string
+    {
+        return hash('sha256', self::CONSENT_VERSION . ':' . $this->scopeHash($context) . ':' . $context['text']);
+    }
+
+    /** Validate immutable evidence and its current native invoice/order context. */
+    public function assertAuthorization(array $attempt): void
+    {
+        $payload = json_decode($attempt['request'], true, 512, JSON_THROW_ON_ERROR);
+        if ($attempt['consent_text'] === null || $attempt['consent_accepted_at'] === null
+            || ($payload['sequenceType'] ?? null) !== 'first'
+            || ($payload['metadata']['consent_version'] ?? null) !== $attempt['consent_version']) {
+            throw new \Payment_Exception('Recurring order authorization changed. Reconciliation required.', [], 409);
+        }
+        if ($attempt['consent_version'] === self::CONSENT_VERSION) {
+            $context = json_decode($attempt['consent_scope'] ?? 'null', true, 512, JSON_THROW_ON_ERROR);
+            if (!is_array($context) || ($context['version'] ?? null) !== self::CONSENT_VERSION
+                || ($payload['metadata']['scope_hash'] ?? null) !== $this->scopeHash($context)
+                || ($context['invoice_id'] ?? null) !== (string) $attempt['invoice_id']
+                || ($context['client_id'] ?? null) !== (string) $attempt['client_id']
+                || ($context['gateway_id'] ?? null) !== (string) $attempt['gateway_id']
+                || ($context['environment'] ?? null) !== $attempt['environment']
+                || ($context['amount'] ?? null) !== $attempt['amount'] || ($context['currency'] ?? null) !== $attempt['currency']
+                || ($context['text'] ?? null) !== $attempt['consent_text']
+                || $attempt['consent_text'] !== $this->consentText($context['scope'])
+                || !in_array($payload['metadata']['consent_source'] ?? null, ['onboarding', 'cart_checkout'], true)) {
+                throw new \Payment_Exception('Recurring order authorization changed. Reconciliation required.', [], 409);
+            }
+            $invoice = $this->invoice((int) $attempt['invoice_id']);
+            $this->di['em']->refresh($invoice);
+            $actual = $this->authorizationContext($invoice, $this->recurringScope($invoice));
+            // A later policy change cannot rewrite or broaden accepted authorization.
+            $actual['payment_mode'] = $context['payment_mode'];
+            if ($actual !== $context) {
+                throw new \Payment_Exception('Recurring order authorization changed. Reconciliation required.', [], 409);
+            }
+
+            return;
+        }
+        $invoice = $this->invoice((int) $attempt['invoice_id']);
+        $this->di['em']->refresh($invoice);
+        $scope = Support\RecurringEligibility::legacyScope($this->di['em'], $invoice);
+        if ($scope === null || !in_array($attempt['consent_version'], ['order-collection-v2', 'order-collection-v3'], true)
+            || ($payload['metadata']['order_id'] ?? null) !== $scope['order_id']
+            || ($payload['metadata']['order_period'] ?? null) !== $scope['period']) {
+            throw new \Payment_Exception('Recurring order authorization changed. Reconciliation required.', [], 409);
+        }
+        $scope['company_name'] = (string) ($this->di['mod_service']('System')->getCompany()['name'] ?? '');
+        if ($attempt['consent_text'] !== $this->consentText($scope, $attempt['consent_version'])) {
+            throw new \Payment_Exception('Recurring order authorization changed. Reconciliation required.', [], 409);
+        }
     }
 
     /** Native gateway entry: authenticated owners choose before any payment reservation. */
@@ -226,7 +334,6 @@ final class PaymentService
     public function resumeCheckout(int $invoiceId): ?string
     {
         $invoice = $this->ownedInvoice($invoiceId);
-        $scope = $this->recurringScope($invoice);
         $attempt = $this->attempts->active($invoiceId);
         if ($attempt === null || $attempt['payment_id'] === null || $attempt['error'] !== null) {
             throw new \Payment_Exception('No existing payment can be resumed. Reload the invoice.', [], 409);
@@ -237,9 +344,8 @@ final class PaymentService
         }
         $payload = json_decode($attempt['request'], true, 512, JSON_THROW_ON_ERROR);
         $this->assertPaymentMode($gateway, $payload['sequenceType']);
-        if ($attempt['consent_version'] !== null && (($payload['metadata']['order_id'] ?? null) !== $scope['order_id']
-            || ($payload['metadata']['order_period'] ?? null) !== $scope['period'] || $attempt['consent_text'] !== $this->consentText($scope, $attempt['consent_version']))) {
-            throw new \Payment_Exception('Recurring order authorization changed. Contact support.', [], 409);
+        if ($attempt['consent_version'] !== null) {
+            $this->assertAuthorization($attempt);
         }
         $payment = $this->fetchPayment($attempt['payment_id'], $key);
         $current = $this->synchronize($attempt, $payment);
@@ -432,12 +538,8 @@ final class PaymentService
         $this->assertCheckoutKind($attempt, $customer === null ? 'oneoff' : 'first', $gatewayId, $environment);
         if ($customer !== null) {
             $payload = json_decode($attempt['request'], true, 512, JSON_THROW_ON_ERROR);
-            $scope = $this->recurringScope($this->ownedInvoice($invoiceId));
-            if (($payload['metadata']['order_id'] ?? null) !== $scope['order_id']
-                || ($payload['metadata']['order_period'] ?? null) !== $scope['period']
-                || $attempt['consent_text'] !== $this->consentText($scope, $attempt['consent_version'])) {
-                throw new \Payment_Exception('Recurring order authorization changed. Reconciliation required.', [], 409);
-            }
+            $this->ownedInvoice($invoiceId);
+            $this->assertAuthorization($attempt);
             if (($payload['customerId'] ?? null) !== $customer['customer_id'] || ($payload['metadata']['customer_mapping'] ?? null) !== $customer['id']) {
                 throw new \Payment_Exception('Onboarding Customer association changed.', [], 409);
             }
@@ -450,6 +552,9 @@ final class PaymentService
 
         try {
             $attempt = $this->attempts->find($attempt['id']);
+            if ($attempt['consent_version'] !== null) {
+                $this->assertAuthorization($attempt);
+            }
             if ($attempt['payment_id'] === null) {
                 $this->assertInvoiceMatches($invoice, $attempt);
                 if (Support\Timestamps::expired($attempt['created_at'], 2700)
@@ -513,7 +618,7 @@ final class PaymentService
                 if ($customer['consent_source'] === 'cart_checkout' && $invoice->getGateway()?->getId() !== $gateway->getId()) {
                     throw new \Payment_Exception('Invoice gateway changed during cart authorization.', [], 409);
                 }
-                if ($this->recurringScope($invoice) !== $customer['consent_scope']) {
+                if ($this->authorizationContext($invoice, $this->recurringScope($invoice)) !== $customer['consent_scope']) {
                     throw new \Payment_Exception('Recurring order changed during authorization. Reload the page.', [], 409);
                 }
             }
@@ -552,8 +657,9 @@ final class PaymentService
                 $payload['sequenceType'] = 'first';
                 $payload['customerId'] = $customer['customer_id'];
                 $scope = $this->recurringScope($invoice);
-                $payload['metadata'] += ['order_id' => $scope['order_id'], 'order_period' => $scope['period'], 'customer_mapping' => $customer['id'], 'profile_id' => $customer['profile_id'], 'consent_version' => self::CONSENT_VERSION, 'consent_source' => $customer['consent_source']];
-                $consent = ['consent_version' => self::CONSENT_VERSION, 'consent_text' => $this->consentText($scope),
+                $context = $customer['consent_scope'];
+                $payload['metadata'] += ['scope_hash' => $this->scopeHash($context), 'customer_mapping' => $customer['id'], 'profile_id' => $customer['profile_id'], 'consent_version' => self::CONSENT_VERSION, 'consent_source' => $customer['consent_source']];
+                $consent = ['consent_scope' => json_encode($context, JSON_THROW_ON_ERROR), 'consent_version' => self::CONSENT_VERSION, 'consent_text' => $this->consentText($scope),
                     'consent_accepted_at' => Support\Timestamps::now(), 'onboarding_status' => 'pending_payment'];
             }
 
@@ -689,6 +795,9 @@ final class PaymentService
             }
             $this->assertPayable($invoice);
             $this->assertInvoiceMatches($invoice, $attempt);
+            if ($attempt['consent_version'] === self::CONSENT_VERSION) {
+                $this->assertAuthorization($attempt);
+            }
             $client = $this->di['em']->getRepository(Client::class)->find((int) $attempt['client_id']);
             if (!$client instanceof Client || $client->getCurrency() !== $attempt['currency']) {
                 throw new \Payment_Exception('Client currency changed; reconciliation is required.');
@@ -757,6 +866,9 @@ final class PaymentService
     {
         $payload = json_decode($attempt['request'], true, 512, JSON_THROW_ON_ERROR);
         $first = ($payload['sequenceType'] ?? null) === 'first';
+        if ($first && $attempt['consent_version'] === self::CONSENT_VERSION) {
+            $this->assertAuthorization($attempt);
+        }
         $metadata = (array) ($payment->metadata ?? []);
         $expectedMetadata = $payload['metadata'];
         ksort($metadata);
@@ -964,7 +1076,7 @@ final class PaymentService
             throw new \Payment_Exception('MolliePayments is not enabled for invoice payments.', [], 409);
         }
         if (!$mode->allows($sequence)) {
-            throw new \Payment_Exception($mode === PaymentMode::RecurringOnly ? 'MolliePayments requires sign-in and explicit authorization for one eligible recurring order. One-time, mixed and unsupported invoices need another payment gateway.' : 'Recurring authorization is disabled for MolliePayments. Choose Pay once or another payment gateway.', [], 409);
+            throw new \Payment_Exception($mode === PaymentMode::RecurringOnly ? 'MolliePayments requires sign-in and explicit authorization for at least one eligible recurring order. One-time-only and unsupported invoices need another payment gateway.' : 'Recurring authorization is disabled for MolliePayments. Choose Pay once or another payment gateway.', [], 409);
         }
     }
 

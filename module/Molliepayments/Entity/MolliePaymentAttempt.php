@@ -78,6 +78,10 @@ class MolliePaymentAttempt
     #[ORM\Column(length: 32, nullable: true)]
     public ?string $consentVersion = null;
 
+    // Immutable local v4 scope; never sent as provider metadata.
+    #[ORM\Column(type: 'text', nullable: true)]
+    public ?string $consentScope = null;
+
     #[ORM\Column(type: 'text', nullable: true)]
     public ?string $consentText = null;
 

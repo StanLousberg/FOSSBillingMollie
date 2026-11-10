@@ -12,13 +12,13 @@
 
             <p class="mb-4">
                 {% if onboarding.payment_mode == 'both' %}
-                Choose how you want to pay for your recurring order.
+                Choose how you want to pay for your invoice.
                 With <strong>Pay once</strong>, you pay this invoice
                 and manually pay each future renewal invoice.
                 With <strong>Authorize and pay</strong>, you can
                 authorize automatic payments for future renewals.
                 {% elseif onboarding.payment_mode == 'recurring_only' %}
-                Authorize future renewal payments for this order and pay this invoice.
+                Authorize future renewal payments for the listed recurring products and pay this invoice.
                 {% else %}
                 Pay this invoice once. Future renewal invoices are paid manually.
                 {% endif %}
@@ -31,11 +31,31 @@
 
                 <div class="card-body">
                     <dl class="row mb-0">
-                        <dt class="col-sm-4">Order</dt>
+                        <dt class="col-sm-4">Recurring products</dt>
                         <dd class="col-sm-8 text-break">
-                            #{{ onboarding.order_id }}
-                            {{ onboarding.order_title }}
+                            <ul class="list-unstyled mb-0">
+                                {% for order in onboarding.recurring_orders %}
+                                <li class="mb-2">
+                                    {{ order.order_title }} (#{{ order.order_id }})<br>
+                                    <span class="text-secondary">{{ order.period_title }} · {{ order.recurring_amount }} {{ order.recurring_currency }} excluding tax</span>
+                                </li>
+                                {% endfor %}
+                            </ul>
                         </dd>
+                        {% if onboarding.one_time_orders or onboarding.one_time_lines %}
+                        <dt class="col-sm-4">One-time products</dt>
+                        <dd class="col-sm-8 text-break">
+                            <ul class="list-unstyled mb-1">
+                                {% for order in onboarding.one_time_orders %}
+                                <li>{{ order.order_title }} (#{{ order.order_id }})</li>
+                                {% endfor %}
+                                {% for line in onboarding.one_time_lines %}
+                                <li>{{ line.title }}</li>
+                                {% endfor %}
+                            </ul>
+                            <span class="text-secondary">Excluded from future automatic payments.</span>
+                        </dd>
+                        {% endif %}
 
                         <dt class="col-sm-4">Invoice</dt>
                         <dd class="col-sm-8">
@@ -97,10 +117,7 @@
                             class="form-check-label"
                             for="molliepayments-consent"
                         >
-                            I authorize {{ onboarding.company_name }}
-                            to automatically collect future renewal
-                            payments for this order using the payment
-                            method I select during Mollie checkout.
+                            {{ onboarding.consent_notice_text }}
                         </label>
                     </div>
                 </div>
@@ -159,6 +176,7 @@
                                 name="consent_digest"
                                 value="{{ onboarding.consent_digest }}"
                             >
+                            <input type="hidden" name="scope_hash" value="{{ onboarding.scope_hash }}">
                             <input
                                 type="hidden"
                                 name="consent_version"
