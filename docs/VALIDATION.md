@@ -417,3 +417,56 @@ ddev exec bash -lc 'find .local/MolliePayments/gateway .local/MolliePayments/mod
 ```
 
 Only disposable fixtures/the designated `molliepayments_test` database were reset; no saved personal development records or credentials were modified. Provider traffic in these tests is faked. No new real Test/Live payment or browser E2E was performed. Browser E2E is explicitly excluded from this correction round because of the known upstream Core CSRF issue, and no workaround or session change is introduced. It remains a production-validation limitation, not a blocker for the next technical review of these scoped corrections. Core, vendor, cart integration, UI styling and financial settlement/webhook implementations are unchanged. Automatic recurring collection remains disabled.
+
+## Multi-order recurring authorization v4 — 2026-11-10
+
+Starting adapter `origin/main`: `d1d769d2fd72b77c7901f4de04e22cb1a435c8e7` (clean working tree). Work stayed on `feat/multi-order-recurring-authorization`. No push or pull request was made.
+
+The installed external host is `fb0e766d2a6ad7de505ac04c5947a0f5bc7e2f7b`, matching upstream HEAD read during this run. PHP 8.3.30, MariaDB 11.8, official SDK v4 and Chromium 148.0.7778.96 were used. The supported main host's actual Cart/Invoice/Order/Period entities, renewal pricing, invoice mutation locks, native session/CSRF and schema/cache services were inspected. Stable 0.8.9 remains unsupported; this run did not rerun the separate pinned checkout. CI retains the pinned/main matrix.
+
+### Automated verification
+
+| Check | Final result |
+| --- | --- |
+| Full module unit/SQLite suite | PASS — 600 tests, 5,008 assertions |
+| Full disposable MariaDB integration suite | PASS — 41 tests, 510 assertions |
+| PHP syntax, own files only | PASS — 60 PHP files |
+| Uncached PHP-CS-Fixer final dry run | PASS — 0/60 files need changes |
+| Composer strict validation | PASS |
+| `git diff --check` | PASS |
+
+The existing commands above were used from the external host root. Logs are `/tmp/mp-multi-unit.log`, `/tmp/mp-multi-maria.log`, `/tmp/mp-multi-style.log`, `/tmp/mp-multi-syntax.log` and `/tmp/mp-multi-composer.log`. Automated fixtures reset only isolated SQLite databases and the explicitly guarded `molliepayments_test` database. They never mutate development clients, invoices or transactions. Provider calls in these suites are SDK fakes.
+
+New coverage includes single/two monthly/monthly-plus-annual/mixed/three-order invoices; setup and discount rows; deduplication and deterministic ordering; one-time-only carts; foreign/canceled/suspended/cancellation-scheduled/mismatched/unknown order references; replacement and same-total line reallocations; stale text/digest/hash; local/provider metadata tampering; all payment modes; exact v2/v3 replay with and without provider IDs; additive nullable scope upgrades; native activation identifiers; readonly rejection of changed existing readiness/resume; Customer reuse; duplicate callbacks; independent MariaDB mixed-cart workers; pending-to-ready mandates and repeated verification with unchanged financial rows. Initial failures were obsolete single-order expectations, fixture schema-column ordering and a missing native Session DI setup on current Core; the final suites above passed without skipping these cases.
+
+### Actual local browser E2E
+
+Playwright drove real Chromium against the existing `https://drained-movie-catapult.ngrok-free.dev` installation. The normal ngrok **Visit Site** button was used. Missing Chromium NSS/NSPR libraries were extracted under `/tmp`; no system package, Core, vendor, SDK, theme or session-security change was delivered. Admin login used the supplied local test account; no credential, session token or provider key was saved in source, fixtures, screenshots or documentation.
+
+All client/product/order/invoice creation and gateway-mode changes occurred through native admin/client panel forms. No SQL INSERT/UPDATE/DELETE, direct fixture-creation API or CLI data factory was used against development data. Read-only SELECTs verified new attempt/Customer/ledger observations. The existing module schema upgrader performed only the additive module upgrade. In this symlinked install its first invocation saw cached Doctrine mapping; native **Extension settings → System → Cache → Invalidate cache**, followed by the same upgrader, added `consent_scope`. The native cache action removed an empty tracked cache `.gitkeep`; that empty file was restored. Existing unrelated Core working-tree state was retained.
+
+| Scenario | Result | Observed evidence |
+| --- | --- | --- |
+| 1. One recurring product | PASS | Invoice 64, order 49, monthly EUR 1.00; both choices, matching consent and unchecked checkbox |
+| 2. Two monthly products | PASS | Native shared cart → invoice 65, orders 50/51, one EUR 3.00 total, both recurring products listed |
+| 3. Monthly + annual | PASS | Native shared cart → invoice 66, orders 52/53, EUR 4.00; separate monthly/yearly labels and prices |
+| 4. Recurring + one-time | PASS | Native shared cart → invoice 67, recurring order 55 and one-time order 54; EUR 5.00; one-time product explicitly excluded |
+| 5. Three products | PASS | Native shared cart → invoice 68, recurring orders 57/58 and one-time order 56; EUR 8.00; monthly/yearly scope shown separately |
+| 6. Pay once | PASS | Invoice 65 opened real Mollie Test Checkout for EUR 3.00; one stored `oneoff`, null consent/scope, no Customer at that point |
+| 7. Authorize and pay | PASS | Invoice 68 opened one real Test `first` for EUR 8.00; local v4 scope contains only 57/58; iDEAL/ABN AMRO Test simulator Paid completed through the browser; public webhook settled the native invoice and attempt; explicit linked mandate became `valid`/`ready` |
+| 8. Payment modes | PASS | Admin saved `both` → `one_time_only` → `recurring_only` → `both`; mixed invoice 67 respectively showed both/Pay once/Authorize and pay/both; original Test mode and `both` restored |
+| 9. Security/repeated actions | PASS | Unchecked checkbox prevented a browser POST; existing first-payment resume returned the same checkout with one attempt; paid invoice 68 and onboarding offered no new payment; client 16 received module HTTP 403 and native invoice navigation redirected to its own invoice list; consent/request/timestamp hashes stayed unchanged across modes |
+
+Mobile at 390×844 had no horizontal overflow; the native Bootstrap layout displayed intervals, the excluded one-time product and the full invoice total. Desktop and mobile page captures are temporary artifacts under `/tmp/mp-multi-*.png`, without credentials. The final checkbox clause is shown once; immutable full consent text additionally enumerates the displayed orders.
+
+Native requests intermittently returned `403 CSRF token invalid`: initial client creation and cart add succeeded only after ordinary fresh panel loads. Two password-update attempts on the disposable client remained rejected and were not forced through. A temporary driver selector timeout required restarting Chromium; the native admin **Login to Client Area** action restored authenticated access to that disposable account. Module CSRF checks remained enforced. The resumed Test checkout returned to the configured FOSSBilling origin in a fresh browser context, which required login; the authenticated native client panel then displayed **Paid** for `FOSS00052` (invoice 68). Continuous-session return preservation was not newly certified by that restarted run. No session/nonce/cookie injection or security-setting change was used.
+
+After the public webhook, read-only checks found invoice 68 `paid`, attempt `paid`, onboarding `ready`, mandate `valid` with an explicit bound ID, one Customer mapping, one native payment credit and one invoice debit. Three browser **Check payment authorization** calls returned HTTP 200 and retained readiness. Before/after hashes of the native transaction rows and client ledger matched exactly; no additional accounting or native transaction-history mutations occurred. Original consent/request/acceptance hashes also remained equal after all modes and verification. Invoice 65's open oneoff was intentionally preserved and never replaced or forced terminal.
+
+### Retained panel-created data and limits
+
+- Clients 15 (**E2E MultiOrder Validation**) and 16 (**E2E MultiOrder Second Client**), welcome email disabled; passwords are not retained here.
+- Products 9–12: **E2E MultiOrder Monthly 20261110**, **E2E MultiOrder Monthly Two 20261110**, **E2E MultiOrder Annual 20261110**, **E2E MultiOrder One Time 20261110**. Tested selections: 1M/EUR 1.00, 1M/EUR 2.00, 1Y/EUR 3.00 and once/EUR 4.00.
+- Orders 49–58 and invoices 64–68; only invoice 68 was paid. Invoices 64, 65, 66 and 67 remain unpaid. There is one open Test oneoff on 65 and one paid Test first on 68. No existing customer/product/invoice/transaction was deleted.
+
+The browser used native cart → gateway → onboarding. The optional custom-theme inline `cart_checkout` endpoint/source has full fake-provider SQLite/MariaDB coverage and an updated invoice-backed example; no installed custom theme was changed to exercise that separate inline UI. Real v2/v3 payments were not recreated; historical compatibility is protected by immutable replay/settlement regressions. This run observed an explicit valid mandate, but other real first payments may omit the explicit ID/link: those must remain pending and eventually require review rather than guessing a Customer mandate. Automatic future collection remains disabled and production readiness is not claimed. The code is ready for technical review with these operational/session and custom-theme validation limits recorded.
