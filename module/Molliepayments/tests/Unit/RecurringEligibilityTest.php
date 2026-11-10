@@ -42,7 +42,7 @@ test('ineligible invoice rejects onboarding page and direct API before provider 
     expect(fn () => mollieFirst($ctx))->toThrow(Payment_Exception::class)
         ->and($ctx->requests)->toBeEmpty()->and($ctx->customerRequests)->toBeEmpty()
         ->and((int) $ctx->db->fetchOne('SELECT COUNT(*) FROM molliepayments_attempt'))->toBe(0);
-})->with(['custom', 'deposit', 'one_time', 'period_mismatch', 'invalid_period', 'canceled', 'foreign_order', 'missing_order', 'mixed', 'multiple']);
+})->with(['custom', 'deposit', 'one_time', 'period_mismatch', 'invalid_period', 'canceled', 'foreign_order', 'missing_order', 'mixed']);
 
 test('native recurring checkout routes before provider requests or reservation', function (string $status): void {
     $ctx = mollieOnboarding(molliePaymentContext());
@@ -88,8 +88,8 @@ test('stored consent is scoped to one order and cannot follow a reassigned invoi
     mollieFirst($ctx);
     $attempt = mollieAttempt($ctx);
     expect($attempt['consent_text'])->toBe($page['consent_text'])
-        ->and($ctx->payload['metadata']['order_id'])->toBe((string) $ctx->order->getId())
-        ->and($ctx->payload['metadata']['order_period'])->toBe('1M');
+        ->and(json_decode($attempt['consent_scope'], true)['scope']['recurring_orders'][0])->toMatchArray(['order_id' => (string) $ctx->order->getId(), 'period' => '1M'])
+        ->and($ctx->payload['metadata']['scope_hash'])->toBe($page['scope_hash']);
     $order = clone $ctx->order;
     $ctx->em->persist($order);
     $ctx->em->flush();
@@ -176,7 +176,7 @@ test('ambiguous and custom invoice contents route only to oneoff checkout', func
     expect($ctx->payments->checkoutRoute($ctx->invoice->getId(), $ctx->gateway->getId()))->toContain('https://www.mollie.com/checkout/')
         ->and($ctx->payload['sequenceType'])->toBe('oneoff')->and($ctx->customerRequests)->toBeEmpty()
         ->and(mollieAttempt($ctx)['consent_version'])->toBeNull();
-})->with(['custom', 'mixed', 'multiple']);
+})->with(['custom', 'mixed']);
 
 test('native invoice item lookup keeps onboarding scoped to its own invoice', function (): void {
     $ctx = mollieOnboarding(molliePaymentContext());

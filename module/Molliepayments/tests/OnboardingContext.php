@@ -70,3 +70,20 @@ function mollieFirst(object $ctx, bool $consent = true): ?string
 {
     return $ctx->payments->firstCheckout((int) $ctx->invoice->getId(), $consent);
 }
+
+/** Construct genuine immutable historical evidence in disposable fixtures only. */
+function mollieLegacyConsent(object $ctx, string $version): string
+{
+    $text = $version === 'order-collection-v2'
+        ? 'I authorize future automatic collection through Mollie only for renewal invoices of the recurring order identified above. Amounts will be based on the actual invoices. I will complete this first payment using the account or card to authorize. Automatic collection is not enabled by this release.'
+        : 'I authorize Example Hosting to collect future renewal payments for this order through the payment method I select during Mollie checkout. Amounts will be based on the actual renewal invoices.';
+    $text = 'Order #' . $ctx->order->getId() . ' (' . $ctx->order->getTitle() . '), ' . (new FOSSBilling\Core\Period('1M'))->getTitle() . '. ' . $text;
+    unset($ctx->payload['metadata']['scope_hash']);
+    $ctx->payload['metadata']['order_id'] = (string) $ctx->order->getId();
+    $ctx->payload['metadata']['order_period'] = '1M';
+    $ctx->payload['metadata']['consent_version'] = $version;
+    $ctx->db->update('molliepayments_attempt', ['consent_scope' => null, 'consent_version' => $version, 'consent_text' => $text,
+        'request' => json_encode($ctx->payload, JSON_THROW_ON_ERROR)], ['id' => mollieAttempt($ctx)['id']]);
+
+    return $text;
+}

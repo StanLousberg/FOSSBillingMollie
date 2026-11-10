@@ -19,7 +19,7 @@ function mollieCartContext(): object
 test('cart consent creates one invoice-backed first payment and persists its fixed source', function (): void {
     $ctx = mollieCartContext();
     $api = mollieClientApi($ctx, action: 'consent_notice');
-    $notice = $api->consent_notice([]);
+    $notice = $api->consent_notice(['invoice_id' => $ctx->invoice->getId()]);
     expect($notice['consent_text'])->toContain('Example Hosting', 'actual renewal invoices')
         ->and($ctx->requests)->toBeEmpty()->and($ctx->customerRequests)->toBeEmpty();
     $params = mollieCartParams($ctx) + ['gateway_id' => 999, 'client_id' => 999, 'amount' => '0.01', 'environment' => 'live', 'consent_source' => 'attacker'];
@@ -96,6 +96,7 @@ test('cart consent rejects unsafe requests before any provider activity', functi
 test('cart override never grants consent to unsupported invoice or recurring order scope', function (string $case, string $mode): void {
     $ctx = mollieCartContext();
     mollieSetPaymentMode($ctx, $mode);
+    $params = mollieCartParams($ctx);
     match ($case) {
         'custom' => $ctx->item->setType(InvoiceItem::TYPE_CUSTOM),
         'deposit' => $ctx->item->setType(InvoiceItem::TYPE_DEPOSIT),
@@ -120,11 +121,10 @@ test('cart override never grants consent to unsupported invoice or recurring ord
         $ctx->em->persist($item);
     }
     $ctx->em->flush();
-    $params = mollieCartParams($ctx);
     $api = mollieClientApi($ctx, $params, action: 'cart_checkout');
     expect(fn () => $api->cart_checkout($params))->toThrow(Payment_Exception::class)
         ->and($ctx->requests)->toBeEmpty()->and($ctx->customerRequests)->toBeEmpty();
-})->with(['custom', 'deposit', 'one_time', 'mismatch', 'canceled', 'suspended', 'mixed', 'multiple', 'paid', 'unissued'])->with(['both', 'one_time_only', 'recurring_only']);
+})->with(['custom', 'deposit', 'one_time', 'mismatch', 'canceled', 'suspended', 'mixed', 'paid', 'unissued'])->with(['both', 'one_time_only', 'recurring_only']);
 
 test('cart consent timeout reuses source evidence request and idempotency key', function (): void {
     $ctx = mollieCartContext();
@@ -180,6 +180,7 @@ test('authenticated provider metadata cannot substitute another consent source',
 test('cart retry preserves source-less historical first-payment requests', function (): void {
     $ctx = mollieCartContext();
     mollieFirst($ctx);
+    mollieLegacyConsent($ctx, 'order-collection-v3');
     unset($ctx->payload['metadata']['consent_source']);
     $request = json_encode($ctx->payload, JSON_THROW_ON_ERROR);
     $ctx->db->update('molliepayments_attempt', ['request' => $request], ['id' => mollieAttempt($ctx)['id']]);
@@ -192,7 +193,7 @@ test('guests cannot obtain a client cart consent notice', function (): void {
     $ctx = mollieCartContext();
     $api = mollieClientApi($ctx, action: 'consent_notice');
     unset($ctx->di['loggedin_client']);
-    expect(fn () => $api->consent_notice([]))->toThrow(Payment_Exception::class)
+    expect(fn () => $api->consent_notice(['invoice_id' => $ctx->invoice->getId()]))->toThrow(Payment_Exception::class)
         ->and($ctx->requests)->toBeEmpty()->and($ctx->customerRequests)->toBeEmpty();
 });
 
@@ -220,6 +221,6 @@ test('cart consent stays bound to the company snapshot through invoice authoriza
         $ctx->services['system']->shouldReceive('getCompany')->andReturn(['name' => 'Changed Hosting']);
     });
     $api = mollieClientApi($ctx, $params, action: 'cart_checkout');
-    expect(fn () => $api->cart_checkout($params))->toThrow(Payment_Exception::class, 'Authorization text changed')
+    expect(fn () => $api->cart_checkout($params))->toThrow(Payment_Exception::class, 'authorization changed')
         ->and($ctx->requests)->toBeEmpty()->and($ctx->customerRequests)->toBeEmpty();
 });

@@ -455,7 +455,7 @@ test('MariaDB onboarding migration adds nullable evidence without changing histo
     mollieResolveCustomer($ctx);
     $ctx->payments->checkout($ctx->invoice->getId(), $ctx->gateway->getId());
     mollieCredit($ctx, '10.00');
-    $columns = ['consent_version', 'consent_text', 'consent_accepted_at', 'onboarding_status', 'mandate_id', 'mandate_status', 'mandate_verified_at'];
+    $columns = ['consent_version', 'consent_scope', 'consent_text', 'consent_accepted_at', 'onboarding_status', 'mandate_id', 'mandate_status', 'mandate_verified_at'];
     foreach ($columns as $column) {
         $ctx->db->executeStatement('ALTER TABLE molliepayments_attempt DROP COLUMN ' . $column);
     }
@@ -690,4 +690,48 @@ test('MariaDB repeated cron reads add no transactions events or financial mutati
         ->and($ctx->invoice->getStatus())->toBe('paid')
         ->and($ctx->db->fetchAllAssociative("SELECT * FROM {$table} ORDER BY id"))->toBe($transactions)
         ->and($ctx->db->fetchAllAssociative('SELECT * FROM client_balance ORDER BY id'))->toBe($ledger);
+});
+
+require_once dirname(__DIR__) . '/MultiOrderContext.php';
+
+test('MariaDB concurrent mixed cart requests preserve one immutable multi-order authorization', function (): void {
+    $ctx = mollieOnboarding(mollieMariaContext());
+    $annual = mollieExtraOrder($ctx, '1Y');
+    mollieExtraOrder($ctx, null);
+    $ctx->invoice->setGateway($ctx->gateway);
+    $ctx->em->flush();
+    $ids = [(string) $ctx->order->getId(), (string) $annual->getId()];
+    mollieResolveCustomer($ctx);
+    $ctx->db->close();
+    $job = static function (): void {
+        $child = mollieOnboarding(mollieMariaContext(false));
+        $params = mollieCartParams($child);
+        try {
+            mollieClientApi($child, $params, action: 'cart_checkout')->cart_checkout($params);
+        } catch (Payment_Exception $error) {
+            if (!str_contains($error->getMessage(), 'already checking') && !str_contains($error->getMessage(), 'already in progress')) {
+                throw $error;
+            }
+        }
+        $child->db->close();
+    };
+    mollieMariaWorkers([$job, $job]);
+    $check = mollieOnboarding(mollieMariaContext(false));
+    $row = mollieAttempt($check);
+    $scope = json_decode($row['consent_scope'], true);
+    expect(array_column($scope['scope']['recurring_orders'], 'order_id'))->toBe($ids)
+        ->and($scope['scope']['period_count'])->toBe(2)
+        ->and((int) $check->db->fetchOne('SELECT COUNT(*) FROM molliepayments_attempt'))->toBe(1)
+        ->and((int) $check->db->fetchOne('SELECT COUNT(*) FROM molliepayments_customer'))->toBe(1);
+    $check->status = 'paid';
+    $check->mandateStatus = 'pending';
+    mollieWebhook($check);
+    $ledger = $check->db->fetchAllAssociative('SELECT * FROM client_balance ORDER BY id');
+    $check->mandateStatus = 'valid';
+    $check->payments->reverifyOnboarding($check->invoice->getId());
+    $check->payments->reverifyOnboarding($check->invoice->getId());
+    mollieWebhook($check);
+    expect(mollieAttempt($check)['onboarding_status'])->toBe('ready')
+        ->and(mollieAttempt($check)['consent_scope'])->toBe($row['consent_scope'])
+        ->and($check->db->fetchAllAssociative('SELECT * FROM client_balance ORDER BY id'))->toBe($ledger);
 });
