@@ -470,3 +470,53 @@ After the public webhook, read-only checks found invoice 68 `paid`, attempt `pai
 - Orders 49–58 and invoices 64–68; only invoice 68 was paid. Invoices 64, 65, 66 and 67 remain unpaid. There is one open Test oneoff on 65 and one paid Test first on 68. No existing customer/product/invoice/transaction was deleted.
 
 The browser used native cart → gateway → onboarding. The optional custom-theme inline `cart_checkout` endpoint/source has full fake-provider SQLite/MariaDB coverage and an updated invoice-backed example; no installed custom theme was changed to exercise that separate inline UI. Real v2/v3 payments were not recreated; historical compatibility is protected by immutable replay/settlement regressions. This run observed an explicit valid mandate, but other real first payments may omit the explicit ID/link: those must remain pending and eventually require review rather than guessing a Customer mandate. Automatic future collection remains disabled and production readiness is not claimed. The code is ready for technical review with these operational/session and custom-theme validation limits recorded.
+
+## Authorization lifecycle and partial order cancellation — 2026-11-10
+
+This correction round deliberately ran **no browser/E2E/Playwright tests, real Mollie API requests, panel actions or development-data mutations**. The browser evidence in the preceding section belongs to the earlier v4 implementation and is not recertified here. All provider interactions below use SDK fakes and disposable SQLite/MariaDB fixtures.
+
+The initial module working tree was clean. Branch `fix/recurring-authorization-lifecycle` was created from the newest local `main`, `d1d769d2fd72b77c7901f4de04e22cb1a435c8e7`. That local main did not contain reviewed commits `bcb6095`/`f6400ed`, so they were cherry-picked onto the new branch as `6a6765e18cd25c14a13f4dfd110ce75032f158dd` and `e20f102792916339c8fff20da72a2cad90cbf70f` before this correction. Main, existing local state and the external Core checkout were preserved. No push or pull request was made.
+
+### Confirmed findings and correction
+
+Both review findings were reproduced in source: `assertAuthorization()` reconstructed acceptance using current order names/prices/company/native renewal quotes and was called by settlement and mandate verification. `onboarding()` also called the all-or-nothing new-checkout classifier before loading stored evidence. Consequently normal lifecycle changes could strand payment processing or make historical pages inaccessible; one canceled order could block the entire multi-order consent.
+
+The implementation now separates:
+
+1. **New checkout / unresolved POST replay:** live invoice/order/period/price/text context remains strict before reservation and immediately before a new provider creation request. Changed or reassigned scope cannot create/replay a payment. Known provider payments use their original evidence and GET recovery; Customer creation is disabled on reuse.
+2. **Historical proof / financial verification:** saved v4 version/snapshot/text/acceptance time/hash and invoice/client/gateway/environment/amount/currency references are checked without rebuilding mutable order data. Authenticated payment identity, Customer/profile, full metadata, amount/currency, paid timestamp and native settlement/idempotency/credential checks remain. V2/v3 use their original metadata and version-specific stored wording without upgrading or rewriting records. V1 remains ineligible for order authorization. Monetary comparisons canonicalize through the existing minor-unit helper so SQLite integer affinity does not alter two-decimal identity.
+3. **Current applicability:** read-only native entity lookups consider only original order IDs. Cancellation, scheduled cancellation, different ownership/period/currency/product or a missing/inactive order exclude that order alone. Ordinary names, prices, configuration and activation identifiers do not erase historical proof. No new table, column, persistent status, event consumer, scheduler or automatic collection is added.
+
+The Bootstrap page shows original consent/version/acceptance time and original order/period/price data, together with per-order current eligibility/exclusion reasons. A fully canceled authorization remains accessible, with no eligible orders, new payment or fresh-consent form. Mandate readiness remains independently verifiable. Existing `manual_review` is used for inconsistent original evidence or paid-payment verification; writes are fenced by the existing attempt lease and never change native financial rows.
+
+Actual Core source inspected includes native order activation/update/cancellation events and metadata, `Order\Service::updateOrder()`/`cancelFromOrder()`/scheduled cancellation, `Invoice\Service::resolveRenewalLine()`, and domain registration/renewal title/config handling. The domain regression executes the actual native Invoice renewal resolver and domain title service: a pending first-payment order activates and resolves to a different renewal price without invalidating its accepted payment or mandate. No Core/vendor/SDK file is modified.
+
+### Final automated verification
+
+Installed external host: `fb0e766d2a6ad7de505ac04c5947a0f5bc7e2f7b`, PHP 8.3.30 and MariaDB 11.8. This round did not fetch upstream, rerun a separate pinned host or certify a new Core release. The existing CI pinned/main matrix remains. The explicit disposable MariaDB guard accepts only `molliepayments_test`; no test command targets existing panel records.
+
+| Check | Final result |
+| --- | --- |
+| Full unit/SQLite suite | PASS — 654 tests, 6,347 assertions |
+| Full MariaDB integration suite | PASS — 46 tests, 613 assertions |
+| Total automated suites | PASS — 700 tests, 6,960 assertions |
+| PHP syntax, own files only | PASS — 62 files |
+| Uncached PHP-CS-Fixer final dry run | PASS — 0/62 files need changes |
+| Composer strict validation | PASS |
+| `git diff --check` | PASS |
+
+Logs: `/tmp/mp-lifecycle-unit.log`, `/tmp/mp-lifecycle-maria.log`, `/tmp/mp-lifecycle-syntax.log`, `/tmp/mp-lifecycle-style.log`, `/tmp/mp-lifecycle-composer.log`. Commands from the external host root:
+
+```bash
+ddev exec ./src/vendor/bin/pest --test-directory=../tests --configuration=phpunit.xml.dist src/modules/Molliepayments/tests/Unit
+ddev exec env MOLLIEPAYMENTS_MYSQL_URL=mysql://db:db@db:3306/molliepayments_test ./src/vendor/bin/pest --test-directory=../tests --configuration=phpunit.xml.dist src/modules/Molliepayments/tests/Integration
+ddev exec ./src/vendor/bin/php-cs-fixer fix --config=.local/MolliePayments/.php-cs-fixer.php --using-cache=no --dry-run --diff --sequential
+ddev exec composer validate --strict --no-check-publish --working-dir=.local/MolliePayments
+ddev exec bash -lc 'find .local/MolliePayments/gateway .local/MolliePayments/module -path "*/vendor" -prune -o -name "*.php" -print0 | xargs -0 -n 1 php -l'
+```
+
+Coverage includes paid title/price/config/company changes across v2/v3/v4; actual native domain renewal repricing after activation; partial, scheduled and complete cancellation; period/ownership/currency/product changes, suspension and missing orders; new order non-expansion; known payment resume/settlement after lifecycle changes; immutable consent/request/acceptance snapshots; repeated transaction-free mandate checks; legacy wording manipulation; tampered local scope hashes/text/timestamps and authenticated payment Customer/profile/ID/invoice/gateway/sequence/amount/currency/metadata; unresolved replay/pre-reservation scope changes; native decimal storage; and historical Bootstrap rendering with no consent/payment controls after cancellation. Independent MariaDB workers reverify partial/all-canceled authorizations without accounting changes and settle changed-order duplicate paid callbacks exactly once.
+
+The first run exposed eight old expectations that treated live title/price/period changes as invalid historical evidence. The strict regressions were retained for unresolved creation/replay, while new positive historical lifecycle regressions cover known payments. Initial new-fixture failures used incorrect native domain configuration keys and compared raw SQLite float/string values; corrected native fixture data and existing repository normalization resolved them. No financial/idempotency test was skipped or removed to hide a failure.
+
+Remaining limits: v2/v3 never stored v4 hashes/snapshots, so their free-text fields depend on original database audit integrity; no retroactive hash or live-order reconstruction is invented. Current applicability is a derived native-state view, not permanent revocation history or permission to start a collection. Different intervals/new orders require fresh explicit consent; automatic future collection remains disabled. Real provider/browser validation was explicitly excluded from this task. Both reviewed lifecycle findings are resolved by code and isolated regression evidence, with no production-readiness claim.

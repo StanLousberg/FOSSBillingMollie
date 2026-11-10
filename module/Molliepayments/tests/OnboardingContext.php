@@ -8,7 +8,7 @@ use Mollie\Api\Http\Requests\GetPaginatedMandateRequest;
 
 require_once __DIR__ . '/CustomerContext.php';
 
-function mollieOnboarding(object $ctx): object
+function mollieOnboarding(object $ctx, bool $initializeOrderPricing = true): object
 {
     $order = $ctx->em->find(Box\Mod\Order\Entity\Order::class, (int) $ctx->item->getRelId());
     if ($order === null) {
@@ -19,8 +19,10 @@ function mollieOnboarding(object $ctx): object
         $ctx->item->setType(Box\Mod\Invoice\Entity\InvoiceItem::TYPE_ORDER)->setRelId((string) $order->getId())->setPeriod('1M');
         $ctx->em->flush();
     }
-    $order->setPrice('20.00')->setQuantity(1)->setCurrency('EUR');
-    $ctx->em->flush();
+    if ($initializeOrderPricing) {
+        $order->setPrice('20.00')->setQuantity(1)->setCurrency('EUR');
+        $ctx->em->flush();
+    }
     $ctx->services['system']->shouldReceive('getCompany')->byDefault()->andReturn(['name' => 'Example Hosting']);
     $product = new Box\Mod\Product\Entity\Product();
     $product->setType('custom');

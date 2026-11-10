@@ -82,12 +82,13 @@ test('any invalid recurring component blocks the entire mixed authorization', fu
         ->and($ctx->requests)->toBeEmpty()->and($ctx->customerRequests)->toBeEmpty();
 })->with(['owner', 'cancellation', 'mismatch', 'canceled', 'suspended']);
 
-test('mixed authorization rejects changed context before provider payment creation or reuse', function (string $case, bool $reserved): void {
+test('mixed authorization rejects changed context before provider payment creation or unresolved replay', function (string $case, bool $reserved): void {
     $ctx = mollieOnboarding(molliePaymentContext());
     $other = mollieExtraOrder($ctx, '1Y');
     $notice = $ctx->payments->onboarding($ctx->invoice->getId());
     if ($reserved) {
         mollieFirst($ctx);
+        $ctx->db->update('molliepayments_attempt', ['payment_id' => null, 'status' => 'creating'], ['id' => mollieAttempt($ctx)['id']]);
     }
     if ($case === 'replace') {
         $replacement = mollieExtraOrder($ctx, '1Y');
@@ -141,7 +142,7 @@ test('v4 local or authenticated provider scope tampering fails before accounting
     $ctx->status = 'paid';
     expect(fn () => mollieWebhook($ctx))->toThrow(Payment_Exception::class)
         ->and($ctx->invoice->getStatus())->toBe('unpaid')->and($ctx->db->fetchOne('SELECT COUNT(*) FROM client_balance'))->toBe(0);
-})->with(['provider_hash', 'local_hash', 'text', 'current_order']);
+})->with(['provider_hash', 'local_hash', 'text']);
 
 test('mixed invoice mode matrix preserves exact authorization and oneoff has no Customer', function (string $mode, bool $first): void {
     $ctx = mollieOnboarding(molliePaymentContext());
@@ -269,7 +270,7 @@ test('invoice-backed cart notice accepts the native hash and rejects foreign own
         ->and($ctx->requests)->toBeEmpty();
 });
 
-test('onboarding never advertises changed existing consent as resumable or ready', function (bool $paid): void {
+test('onboarding retains historical consent after an order title changes', function (bool $paid): void {
     $ctx = mollieOnboarding(molliePaymentContext());
     $annual = mollieExtraOrder($ctx, '1Y');
     mollieFirst($ctx);
@@ -281,6 +282,6 @@ test('onboarding never advertises changed existing consent as resumable or ready
     $annual->setTitle('Replacement description');
     $ctx->em->flush();
     expect($ctx->payments->onboarding($ctx->invoice->getId()))->toMatchArray([
-        'status' => 'manual_review', 'can_pay' => false, 'can_resume' => false,
+        'status' => $paid ? 'ready' : 'pending_payment', 'can_pay' => false, 'can_resume' => !$paid,
     ])->and(mollieAttempt($ctx))->toBe($before);
 })->with([false, true]);

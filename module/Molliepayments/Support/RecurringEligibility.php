@@ -45,10 +45,7 @@ final class RecurringEligibility
                 continue;
             }
             $em->refresh($order);
-            if ((int) $order->getClientId() !== (int) $invoice->getClientId()
-                || !in_array($order->getStatus(), [Order::STATUS_PENDING_SETUP, Order::STATUS_ACTIVE], true)
-                || $item->getPeriod() !== $order->getPeriod()
-                || $em->getRepository(OrderMeta::class)->findOneBy(['order' => $order, 'name' => 'cancel_at_period_end', 'value' => '1']) !== null) {
+            if (self::ineligibility($em, $order, (int) $invoice->getClientId(), $item->getPeriod()) !== null) {
                 $invalid[] = (string) $item->getId();
                 continue;
             }
@@ -87,6 +84,53 @@ final class RecurringEligibility
         $scope = self::classify($em, $invoice);
 
         return $scope['invalid_references'] === [] && $scope['recurring_orders'] !== [] ? $scope : null;
+    }
+
+    /** Derive coverage from original IDs only. Never enlarge or rewrite accepted consent. */
+    public static function applicability(EntityManagerInterface $em, array $authorizedOrders, int $clientId, string $currency): array
+    {
+        $orders = $applicable = $excluded = [];
+        foreach ($authorizedOrders as $original) {
+            $order = $em->find(Order::class, (int) $original['order_id']);
+            $reason = 'missing_order';
+            if ($order instanceof Order) {
+                $em->refresh($order);
+                $reason = self::ineligibility($em, $order, $clientId, $original['period']);
+                if ($reason === null && $order->getCurrency() !== ($original['currency'] ?? $currency)) {
+                    $reason = 'currency_changed';
+                }
+                if ($reason === null && array_key_exists('product_id', $original) && $order->getProductId() !== $original['product_id']) {
+                    $reason = 'product_changed';
+                }
+            }
+            $entry = $original + ['applicable' => $reason === null, 'exclusion_reason' => $reason];
+            $orders[] = $entry;
+            if ($reason === null) {
+                $applicable[] = $entry;
+            } else {
+                $excluded[] = $entry;
+            }
+        }
+
+        return ['authorized_orders' => $orders, 'applicable_orders' => $applicable, 'excluded_orders' => $excluded];
+    }
+
+    private static function ineligibility(EntityManagerInterface $em, Order $order, int $clientId, ?string $period): ?string
+    {
+        if ((int) $order->getClientId() !== $clientId) {
+            return 'owner_changed';
+        }
+        if ($order->getPeriod() !== $period) {
+            return 'period_changed';
+        }
+        if (!in_array($order->getStatus(), [Order::STATUS_PENDING_SETUP, Order::STATUS_ACTIVE], true)) {
+            return 'order_unavailable';
+        }
+        if ($em->getRepository(OrderMeta::class)->findOneBy(['order' => $order, 'name' => 'cancel_at_period_end', 'value' => '1']) !== null) {
+            return 'cancellation_scheduled';
+        }
+
+        return null;
     }
 
     public static function legacyScope(EntityManagerInterface $em, Invoice $invoice): ?array

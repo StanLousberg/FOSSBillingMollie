@@ -735,3 +735,83 @@ test('MariaDB concurrent mixed cart requests preserve one immutable multi-order 
         ->and(mollieAttempt($check)['consent_scope'])->toBe($row['consent_scope'])
         ->and($check->db->fetchAllAssociative('SELECT * FROM client_balance ORDER BY id'))->toBe($ledger);
 });
+
+require_once dirname(__DIR__) . '/AuthorizationLifecycleContext.php';
+
+test('MariaDB historical mandate workers retain partial coverage without touching accounting', function (bool $allCanceled): void {
+    $ctx = mollieOnboarding(mollieMariaContext());
+    $annual = mollieExtraOrder($ctx, '1Y');
+    mollieFirst($ctx);
+    $ctx->status = 'paid';
+    mollieWebhook($ctx);
+    $financial = mollieFinancialSnapshot($ctx);
+    $evidence = mollieConsentEvidence($ctx);
+    $ctx->order->setTitle('Renamed after settlement')->setPrice('99.00');
+    if ($allCanceled) {
+        $ctx->order->setStatus(Box\Mod\Order\Entity\Order::STATUS_CANCELED);
+    }
+    $annual->setStatus(Box\Mod\Order\Entity\Order::STATUS_CANCELED);
+    $ctx->em->flush();
+    $orderId = (string) $ctx->order->getId();
+    $ctx->db->close();
+    $job = static function (): void {
+        $child = mollieOnboarding(mollieMariaContext(false), false);
+        $child->status = 'paid';
+        $child->responses[Mollie\Api\Http\Requests\CreatePaymentRequest::class] = static function (): never { throw new RuntimeException('No new payment allowed'); };
+        $child->responses[Mollie\Api\Http\Requests\CreateCustomerRequest::class] = static function (): never { throw new RuntimeException('No new Customer allowed'); };
+        $transactions = Mockery::mock(Box\Mod\Invoice\ServiceTransaction::class);
+        $transactions->shouldNotReceive('createAndProcess');
+        $child->services['invoice/transaction'] = $transactions;
+        $child->payments->reverifyOnboarding($child->invoice->getId());
+        $child->db->close();
+    };
+    mollieMariaWorkers([$job, $job]);
+    $check = mollieOnboarding(mollieMariaContext(false), false);
+    $page = $check->payments->onboarding($check->invoice->getId());
+    expect($page['status'])->toBe('ready')->and($page['authorization_verified'])->toBeTrue()
+        ->and(array_column($page['applicable_orders'], 'order_id'))->toBe($allCanceled ? [] : [$orderId])
+        ->and($page['authorization_applicable'])->toBe(!$allCanceled)
+        ->and(mollieConsentEvidence($check))->toBe($evidence)->and(mollieFinancialSnapshot($check))->toBe($financial)
+        ->and((int) $check->db->fetchOne('SELECT COUNT(*) FROM molliepayments_attempt'))->toBe(1)
+        ->and((int) $check->db->fetchOne('SELECT COUNT(*) FROM molliepayments_customer'))->toBe(1);
+})->with([false, true]);
+
+test('MariaDB paid callbacks settle once after price title and partial cancellation changes', function (): void {
+    $ctx = mollieOnboarding(mollieMariaContext());
+    $annual = mollieExtraOrder($ctx, '1Y');
+    mollieFirst($ctx);
+    $evidence = mollieConsentEvidence($ctx);
+    $ctx->order->setTitle('Activated recurring service')->setPrice('99.00')->setStatus(Box\Mod\Order\Entity\Order::STATUS_ACTIVE);
+    $ctx->em->flush();
+    mollieScheduleOrderCancellation($ctx, $annual);
+    $ctx->db->close();
+    $job = static function (): void {
+        $child = mollieOnboarding(mollieMariaContext(false), false);
+        $child->status = 'paid';
+        mollieWebhook($child);
+        $child->db->close();
+    };
+    mollieMariaWorkers([$job, $job]);
+    $check = mollieOnboarding(mollieMariaContext(false), false);
+    $page = $check->payments->onboarding($check->invoice->getId());
+    expect($check->invoice->getStatus())->toBe('paid')->and($page['status'])->toBe('ready')
+        ->and($page['applicable_orders'])->toHaveCount(1)->and($page['excluded_orders'])->toHaveCount(1)
+        ->and(mollieConsentEvidence($check))->toBe($evidence)
+        ->and((int) $check->db->fetchOne("SELECT COUNT(*) FROM client_balance WHERE type = 'transaction'"))->toBe(1)
+        ->and((int) $check->db->fetchOne("SELECT COUNT(*) FROM client_balance WHERE type = 'invoice'"))->toBe(1);
+});
+
+test('MariaDB legacy authorization verifies from its stored evidence after order cancellation', function (string $version): void {
+    $ctx = mollieOnboarding(mollieMariaContext());
+    mollieFirst($ctx);
+    mollieLegacyConsent($ctx, $version);
+    $evidence = mollieConsentEvidence($ctx);
+    $ctx->order->setTitle('Renamed legacy order')->setPrice('99.00')->setStatus(Box\Mod\Order\Entity\Order::STATUS_CANCELED);
+    $ctx->em->flush();
+    $ctx->status = 'paid';
+    mollieWebhook($ctx);
+    $financial = mollieFinancialSnapshot($ctx);
+    $page = $ctx->payments->reverifyOnboarding($ctx->invoice->getId());
+    expect($page['status'])->toBe('ready')->and($page['authorization_applicable'])->toBeFalse()
+        ->and(mollieConsentEvidence($ctx))->toBe($evidence)->and(mollieFinancialSnapshot($ctx))->toBe($financial);
+})->with(['order-collection-v2', 'order-collection-v3']);

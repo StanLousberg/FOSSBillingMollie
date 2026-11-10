@@ -74,3 +74,10 @@ function mollieAdditionalRecurringInvoice(object $ctx): void
     $ctx->invoice = $invoice;
     $ctx->item = $item;
 }
+
+function mollieFinancialSnapshot(object $ctx): array
+{
+    return ['transactions' => $ctx->db->fetchAllAssociative('SELECT * FROM ' . $ctx->db->quoteSingleIdentifier('transaction') . ' ORDER BY id'),
+        'ledger' => $ctx->db->fetchAllAssociative('SELECT * FROM client_balance ORDER BY id'),
+        'invoice' => $ctx->db->fetchAllAssociative('SELECT * FROM invoice ORDER BY id')];
+}
