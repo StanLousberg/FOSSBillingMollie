@@ -140,6 +140,7 @@ test('native settings render one connection button and no adapter or environment
         FOSSBilling\Core\Twig\Extension\FOSSBillingExtension::class => static fn () => new FOSSBilling\Core\Twig\Extension\FOSSBillingExtension($di),
         FOSSBilling\Core\Twig\Extension\ApiExtension::class => static fn () => new FOSSBilling\Core\Twig\Extension\ApiExtension($di),
     ]));
+    $di['auth']->shouldReceive('isAdminLoggedIn')->andReturn(false);
     $twig->addGlobal('app_area', 'admin');
     $html = $twig->render('mod_molliepayments_settings.html.twig', [
         'request' => ['ajax' => false],
@@ -152,13 +153,13 @@ test('native settings render one connection button and no adapter or environment
     expect($document->getElementsByTagName('button')->length)->toBe(1);
 });
 
-test('FOSSBilling discovers a native settings page without a standalone module controller', function (): void {
+test('FOSSBilling discovers native settings and mandate administration', function (): void {
     $di = Tests\Helpers\container();
     $module = new FOSSBilling\Core\Module('molliepayments');
     $module->setDi($di);
     expect($module->hasSettingsPage())->toBeTrue()
-        ->and($module->hasAdminController())->toBeFalse()
-        ->and((new MollieService())->getModulePermissions())->toBe(['manage_settings' => []]);
+        ->and($module->hasAdminController())->toBeTrue()
+        ->and((new MollieService())->getModulePermissions())->toBe(['manage_settings' => [], 'view_mandates' => [], 'sync_mandates' => [], 'revoke_mandates' => []]);
 });
 
 test('native admin rendering discovers symlinked module settings while preserving theme priority', function (): void {
@@ -198,7 +199,7 @@ test('native Twig loader misses symlinked settings while still resolving the mod
 });
 
 test('template fallback leaves an already resolved native or theme template loader intact', function (): void {
-    $loader = new Twig\Loader\ArrayLoader(['mod_molliepayments_settings.html.twig' => 'Native template']);
+    $loader = new Twig\Loader\ArrayLoader(['mod_molliepayments_settings.html.twig' => 'Native template', 'mod_molliepayments_mandates.html.twig' => 'Native mandates', 'mod_molliepayments_customer.html.twig' => 'Native customer', 'mod_molliepayments_mandate.html.twig' => 'Native detail', 'mod_molliepayments_mandate_status.html.twig' => 'Native status', 'mod_molliepayments_mandate_actions.html.twig' => 'Native actions']);
     $twig = new Twig\Environment($loader);
     $factory = Mockery::mock(FOSSBilling\Core\Twig\TwigFactory::class);
     $factory->shouldReceive('createAdminEnvironment')->once()->andReturn($twig);

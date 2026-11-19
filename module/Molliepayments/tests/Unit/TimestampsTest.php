@@ -100,10 +100,11 @@ test('native transaction lifecycle timestamps callback changes without touching 
             mollieWebhook($ctx);
         }
         $tx = new Box\Mod\Invoice\Entity\Transaction();
+        $dateClass = (new ReflectionMethod($tx, 'setCreatedAt'))->getParameters()[0]->getType()->getName();
         $tx->setGateway($ctx->gateway)->setInvoice($ctx->invoice)
             ->setStatus(Box\Mod\Invoice\Entity\Transaction::STATUS_PROCESSING)
-            ->setCreatedAt(new DateTime('2000-01-01 00:00:00'))
-            ->setUpdatedAt(new DateTime('2000-01-01 00:00:00'));
+            ->setCreatedAt(new $dateClass('2000-01-01 00:00:00'))
+            ->setUpdatedAt(new $dateClass('2000-01-01 00:00:00'));
         $ctx->em->persist($tx);
         $ctx->em->flush();
         $created = $tx->getCreatedAt()->format('Y-m-d H:i:s');

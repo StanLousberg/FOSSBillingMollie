@@ -1,0 +1,67 @@
+{% extends 'layout_default.html.twig' %}
+{% set active_menu = 'extensions' %}
+{% set mandate = admin.molliepayments_mandate_get({mapping_id: mapping_id, mandate_id: mandate_id}) %}
+{% set can_sync = has_permission('molliepayments', 'sync_mandates') %}
+{% set can_revoke = has_permission('molliepayments', 'revoke_mandates') %}
+{% block meta_title %}{{ 'MolliePayments mandate'|trans }} {{ mandate.mandate_id }}{% endblock %}
+{% block breadcrumbs %}
+<ol class="breadcrumb"><li class="breadcrumb-item"><a href="{{ 'molliepayments/mandates'|url }}">{{ 'Mandates'|trans }}</a></li><li class="breadcrumb-item active" aria-current="page">{{ mandate.mandate_id }}</li></ol>
+{% endblock %}
+{% block content %}
+<div class="card mb-3">
+    <div class="card-header"><h3 class="card-title">{{ mandate.mandate_id }} · {{ mandate.environment|capitalize }}</h3></div>
+    <div class="card-body">
+        <p>{{ 'Status reflects the last successful verification. Refresh to check with Mollie.'|trans }}</p>
+        <dl class="row">
+            <dt class="col-sm-4">{{ 'Provider status'|trans }}</dt><dd class="col-sm-8">{% include 'mod_molliepayments_mandate_status.html.twig' with {status: mandate.status, revocation: mandate.revocation, error: mandate.error, aged: mandate.aged} only %}</dd>
+            <dt class="col-sm-4">{{ 'Customer'|trans }}</dt><dd class="col-sm-8"><a href="{{ ('client/manage/' ~ mandate.client_id)|url }}">{{ mandate.customer_name }} #{{ mandate.client_id }}</a></dd>
+            <dt class="col-sm-4">{{ 'Payment method'|trans }}</dt><dd class="col-sm-8">{{ mandate.method|default('Unknown'|trans) }} · {{ mandate.summary|default('Details hidden'|trans) }}</dd>
+            <dt class="col-sm-4">{{ 'Last successful verification'|trans }}</dt><dd class="col-sm-8">{{ mandate.verified_at|default('Never'|trans) }}</dd>
+        </dl><details class="mb-3"><summary>{{ 'Technical details'|trans }}</summary><dl class="row mt-2">
+            <dt class="col-sm-4">{{ 'Last known Mollie status'|trans }}</dt><dd class="col-sm-8">{{ mandate.provider_status|default('Unknown'|trans) }}</dd>
+            <dt class="col-sm-4">{{ 'Verified scope'|trans }}</dt><dd class="col-sm-8">{{ mandate.scope|default('Unknown'|trans) }}</dd>
+            <dt class="col-sm-4">{{ 'Mollie Customer / profile'|trans }}</dt><dd class="col-sm-8">{{ mandate.customer_id }} / {{ mandate.profile_id }} ({{ mandate.mapping_status }})</dd>
+            <dt class="col-sm-4">{{ 'Provider creation / signature date'|trans }}</dt><dd class="col-sm-8">{{ mandate.provider_created_at|default('Unavailable'|trans) }} / {{ mandate.signature_date|default('Unavailable'|trans) }}</dd>
+            <dt class="col-sm-4">{{ 'Last check'|trans }}</dt><dd class="col-sm-8">{{ mandate.checked_at }}</dd>
+        </dl></details>
+        {% if can_sync and mandate.mapping_status == 'ready' %}
+
+        <form class="d-inline" data-mandate-action action="{{ 'molliepayments/mandate_refresh'|api_url }}" method="post">
+            <input type="hidden" name="CSRFToken" value="{{ CSRFToken }}"><input type="hidden" name="mapping_id" value="{{ mapping_id }}">
+            <input type="hidden" name="mandate_id" value="{{ mandate_id }}">
+            <button class="btn btn-outline-primary" type="submit">{{ 'Refresh mandate'|trans }}</button>
+        </form>
+        {% endif %}
+        {% if can_revoke and mandate.status in ['valid', 'pending'] and mandate.revocation is null and mandate.mapping_status == 'ready' %}
+        <button class="btn btn-danger" type="button" data-bs-toggle="modal" data-bs-target="#revoke-mandate">{{ 'Revoke mandate'|trans }}</button>
+        {% endif %}
+        <p class="mt-3 mb-0" role="status" aria-live="polite" data-mandate-result></p>
+    </div>
+</div>
+<div class="card mb-3"><div class="card-header"><h3 class="card-title">{{ 'Verified onboarding references'|trans }}</h3></div><div class="card-body">
+    {% for reference in mandate.references %}
+    <p><a href="{{ ('invoice/manage/' ~ reference.invoice_id)|url }}">{{ 'Invoice'|trans }} #{{ reference.invoice_id }}</a> · {{ reference.payment_id }} · {{ 'Attempt'|trans }} {{ reference.id }}<br>Historical consent · Orders {% for id in reference.order_ids %}#{{ id }}{{ not loop.last ? ', ' }}{% endfor %} · Currently applicable orders: {{ reference.applicable_order_ids|join(', ')|default('None') }} · {{ reference.consent_version }} · {{ 'Consent accepted'|trans }} {{ reference.consent_accepted_at }} · {{ 'Mandate verified'|trans }} {{ reference.mandate_verified_at|default('No current successful check recorded'|trans) }}</p>
+    {% else %}<p>{{ 'No verified originating payment association. Discovery does not prove customer authorization and never selects a replacement mandate.'|trans }}</p>{% endfor %}
+    {% if mandate.more_references %}<p>Showing the latest 25 onboarding records.</p>{% endif %}
+    {% if mandate.unverified_references %}<p class="text-danger">{{ 'Some stored onboarding references could not be verified and are withheld pending reconciliation.'|trans }}</p>{% endif %}
+    <p class="mb-0">{{ 'Payment method replacement requires customer consent. Ask the customer to open an existing eligible unpaid invoice and use its MolliePayments authorization flow. Paid invoices cannot be reused for reauthorization. Administrators cannot grant consent, create a separate authorization charge, or select a replacement. The previous mandate is never revoked automatically.'|trans }}</p>
+</div></div>
+<details class="card"><summary class="p-3 fw-semibold">{{ 'Administrative audit history (latest 100)'|trans }}</summary>
+<div class="table-responsive"><table class="table card-table"><thead><tr><th>{{ 'Time'|trans }}</th><th>{{ 'Administrator'|trans }}</th><th>{{ 'Action'|trans }}</th><th>{{ 'Outcome'|trans }}</th></tr></thead><tbody>
+{% for entry in mandate.audit %}<tr><td>{{ entry.created_at }}</td><td>{{ entry.admin_id is null ? 'System'|trans : '#' ~ entry.admin_id }}</td><td>{{ entry.action }}</td><td>{{ entry.outcome }}</td></tr>{% else %}<tr><td colspan="4">{{ 'No administration events recorded.'|trans }}</td></tr>{% endfor %}
+</tbody></table></div></details>
+{% if can_revoke %}
+<div class="modal fade" id="revoke-mandate" tabindex="-1" aria-labelledby="revoke-title" aria-hidden="true"><div class="modal-dialog"><div class="modal-content">
+    <div class="modal-header"><h5 class="modal-title" id="revoke-title">{{ 'Revoke mandate'|trans }} {{ mandate_id }}</h5><button type="button" class="btn-close" data-bs-dismiss="modal" aria-label="{{ 'Close'|trans }}"></button></div>
+    <div class="modal-body"><p>{{ 'This prevents future charges using this mandate. Mollie also cancels any provider subscriptions connected to it, including subscriptions created outside this adapter. Existing FOSSBilling invoices, accounting and services remain unchanged. A replacement requires customer consent.'|trans }}</p>
+        <p>{{ mandate.customer_name }} #{{ mandate.client_id }} · {{ mandate.customer_id }} · {{ mandate.environment|capitalize }}</p>
+        <form data-mandate-action action="{{ 'molliepayments/mandate_revoke'|api_url }}" method="post">
+            <input type="hidden" name="CSRFToken" value="{{ CSRFToken }}"><input type="hidden" name="mapping_id" value="{{ mapping_id }}"><input type="hidden" name="mandate_id" value="{{ mandate_id }}">
+            <label class="form-check mb-3"><input class="form-check-input" type="checkbox" name="confirmation" value="revoke" required><span class="form-check-label">{{ 'I understand the consequences and confirm revocation.'|trans }}</span></label>
+            <button type="submit" class="btn btn-danger">{{ 'Confirm revocation'|trans }}</button><p class="mt-2 mb-0" role="status" aria-live="polite" data-action-result></p>
+        </form>
+    </div>
+</div></div></div>
+{% endif %}
+{% endblock %}
+{% block js %}{{ parent() }}{% include 'mod_molliepayments_mandate_actions.html.twig' %}{% endblock %}

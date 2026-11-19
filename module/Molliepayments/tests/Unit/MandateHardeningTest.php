@@ -156,6 +156,7 @@ test('a mandate response after losing the lease cannot overwrite a newer observa
     $ctx->status = 'paid';
     mollieWebhook($ctx);
     $row = mollieAttempt($ctx);
+    $journal = $ctx->db->fetchAllAssociative('SELECT * FROM molliepayments_mandate_system_audit');
     $ctx->responses[GetMandateRequest::class] = static function () use ($ctx, $row) {
         $ctx->db->update('molliepayments_attempt', ['lease' => str_repeat('b', 32), 'onboarding_status' => 'mandate_invalid', 'mandate_status' => 'invalid', 'mandate_verified_at' => null], ['id' => $row['id']]);
 
@@ -163,7 +164,8 @@ test('a mandate response after losing the lease cannot overwrite a newer observa
     };
     $ctx->payments->reverifyOnboarding($ctx->invoice->getId());
     expect(mollieAttempt($ctx)['onboarding_status'])->toBe('mandate_invalid')
-        ->and(mollieAttempt($ctx)['mandate_verified_at'])->toBeNull();
+        ->and(mollieAttempt($ctx)['mandate_verified_at'])->toBeNull()
+        ->and($ctx->db->fetchAllAssociative('SELECT * FROM molliepayments_mandate_system_audit'))->toBe($journal);
 });
 
 test('cron payment-read outages back off without losing pending mandate state', function (): void {

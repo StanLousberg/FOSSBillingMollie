@@ -7,7 +7,6 @@ namespace Box\Mod\Molliepayments;
 use Box\Mod\Invoice\Entity\PayGateway;
 use Box\Mod\Molliepayments\Repository\AttemptRepository;
 use Box\Mod\Molliepayments\Support\Credentials;
-use Box\Mod\Molliepayments\Support\MollieClientFactory;
 use Box\Mod\Molliepayments\Support\ProviderUnavailableException;
 use Mollie\Api\Exceptions\ApiException;
 use Mollie\Api\Http\Requests\GetMandateRequest;
@@ -46,7 +45,6 @@ final class MandateService
             if ($attempt['status'] !== 'paid' || $payments->validatePayment($attempt, $payment) !== 'paid') {
                 throw new \UnexpectedValueException();
             }
-            (new CustomerService($this->di, $this->clientFactory))->verifyOnboardingCustomer($attemptId);
             $method = $payment->method instanceof \BackedEnum ? $payment->method->value : $payment->method;
             $expected = match ($method) {
                 'creditcard' => 'creditcard', 'paypal' => 'paypal',
@@ -60,78 +58,98 @@ final class MandateService
             if (!hash_equals($attempt['credential_fingerprint'], hash_hmac('sha256', $attemptId, $key))) {
                 throw new \UnexpectedValueException();
             }
-            $client = $this->clientFactory !== null ? ($this->clientFactory)($key) : MollieClientFactory::create($key);
-            $mandateId = $payment->mandateId;
-            $link = $payment->_links->mandate->href ?? null;
-            if ($link !== null) {
-                $prefix = 'https://api.mollie.com/v2/customers/' . $payload['customerId'] . '/mandates/';
-                $linkedId = is_string($link) && str_starts_with($link, $prefix) ? substr($link, strlen($prefix)) : '';
-                if (!preg_match('/^mdt_[A-Za-z0-9]{1,124}$/D', $linkedId) || ($mandateId !== null && $mandateId !== $linkedId)) {
-                    throw new \UnexpectedValueException();
-                }
-                $mandateId = $linkedId;
-            }
-            if ($mandateId !== null && $attempt['mandate_id'] !== null && $attempt['mandate_id'] !== $mandateId) {
-                throw new \UnexpectedValueException();
-            }
-            // Instrument/time similarity (and a stored ID alone) cannot prove payment association.
-            // Require the authenticated Payment's explicit relation on every successful check.
-            if ($mandateId === null) {
-                if (Support\Timestamps::expired($attempt['created_at'], 604800)) {
-                    throw new \UnexpectedValueException();
-                }
-
-                return;
-            }
-            if (!preg_match('/^mdt_[A-Za-z0-9]{1,124}$/D', $mandateId)) {
-                throw new \UnexpectedValueException();
-            }
-            try {
-                $mandate = $client->send(new GetMandateRequest($payload['customerId'], $mandateId));
-            } catch (ApiException $error) {
-                if (!in_array($error->getStatusCode(), [404, 410], true)) {
-                    throw $error;
-                }
-                // A known association was explicitly removed; never replace it by discovery.
-                $changes += ['mandate_id' => $mandateId, 'mandate_status' => 'invalid'];
-                $changes['onboarding_status'] = 'mandate_invalid';
-                $category = 'revoked';
-
-                return;
-            }
-            $this->assertMandate($mandate, $payload['customerId'], $attempt['environment'], $expected);
-            if ($mandate->id !== $mandateId) {
-                throw new \UnexpectedValueException();
-            }
-            $status = $mandate->status instanceof \BackedEnum ? $mandate->status->value : $mandate->status;
-            if (!in_array($status, ['valid', 'pending', 'invalid'], true)) {
-                throw new \UnexpectedValueException();
-            }
-            $changes += ['mandate_id' => $mandateId, 'mandate_status' => $status];
-            if ($status !== 'valid') {
-                $changes['onboarding_status'] = $status === 'invalid' ? 'mandate_invalid' : 'pending_mandate';
-                $category = $status;
-
-                return;
-            }
-            // Scope filtering is supported even when this SDK version has no declared scopes property.
-            $scoped = $client->send(new GetPaginatedMandateRequest($payload['customerId'], from: $mandateId, limit: 1, scopes: ['customer-not-present']));
-            foreach ($scoped as $candidate) {
-                if ($candidate->id === $mandateId) {
-                    $this->assertMandate($candidate, $payload['customerId'], $attempt['environment'], $expected);
-                    if (!$candidate->isValid()) {
-                        $changes['mandate_status'] = $candidate->isInvalid() ? 'invalid' : 'pending';
-                        $changes['onboarding_status'] = $candidate->isInvalid() ? 'mandate_invalid' : 'pending_mandate';
-
-                        return;
+            (new CustomerService($this->di, $this->clientFactory))->withOnboardingCustomer($attemptId, function (array $mapping, $client, string $mappingLease) use ($attempts, $attemptId, $lease, $attempt, $payment, $payload, $expected, &$changes, &$category): void {
+                $mandateId = $payment->mandateId;
+                $link = $payment->_links->mandate->href ?? null;
+                if ($link !== null) {
+                    $prefix = 'https://api.mollie.com/v2/customers/' . $payload['customerId'] . '/mandates/';
+                    $linkedId = is_string($link) && str_starts_with($link, $prefix) ? substr($link, strlen($prefix)) : '';
+                    if (!preg_match('/^mdt_[A-Za-z0-9]{1,124}$/D', $linkedId) || ($mandateId !== null && $mandateId !== $linkedId)) {
+                        throw new \UnexpectedValueException();
                     }
-                    $changes['onboarding_status'] = 'ready';
-                    $changes['mandate_verified_at'] = Support\Timestamps::now();
+                    $mandateId = $linkedId;
+                }
+                if ($mandateId !== null && $attempt['mandate_id'] !== null && $attempt['mandate_id'] !== $mandateId) {
+                    throw new \UnexpectedValueException();
+                }
+                // Instrument/time similarity (and a stored ID alone) cannot prove payment association.
+                // Require the authenticated Payment's explicit relation on every successful check.
+                if ($mandateId === null) {
+                    if (Support\Timestamps::expired($attempt['created_at'], 604800)) {
+                        throw new \UnexpectedValueException();
+                    }
 
                     return;
                 }
-            }
-            throw new \UnexpectedValueException();
+                if (!preg_match('/^mdt_[A-Za-z0-9]{1,124}$/D', $mandateId)) {
+                    throw new \UnexpectedValueException();
+                }
+                $snapshots = new MandateSnapshotService($this->di, $this->clientFactory, static function () use ($attempts, $attemptId, $lease): void {
+                    $owned = $attempts->lock($attemptId);
+                    if ($owned['lease'] !== $lease || $owned['lease_until'] === null || $owned['lease_until'] < Support\Timestamps::now()) {
+                        throw new ProviderUnavailableException('Onboarding verification lease expired.', [], 409);
+                    }
+                });
+                try {
+                    try {
+                        $mandate = $client->send(new GetMandateRequest($payload['customerId'], $mandateId));
+                    } catch (ApiException $error) {
+                        if (!in_array($error->getStatusCode(), [404, 410], true)) {
+                            throw $error;
+                        }
+                        $snapshots->missing($mapping, $mappingLease, $mandateId, null);
+                        // A known association was explicitly removed; never replace it by discovery.
+                        $changes += ['mandate_id' => $mandateId, 'mandate_status' => 'invalid'];
+                        $changes['onboarding_status'] = 'mandate_invalid';
+                        $category = 'revoked';
+
+                        return;
+                    }
+                    $this->assertMandate($mandate, $payload['customerId'], $attempt['environment'], $expected);
+                    if ($mandate->id !== $mandateId) {
+                        throw new \UnexpectedValueException();
+                    }
+                    $status = $mandate->status instanceof \BackedEnum ? $mandate->status->value : $mandate->status;
+                    if (!in_array($status, ['valid', 'pending', 'invalid'], true)) {
+                        throw new \UnexpectedValueException();
+                    }
+                    $changes += ['mandate_id' => $mandateId, 'mandate_status' => $status];
+                    if ($status !== 'valid') {
+                        $snapshots->snapshot($mapping, $client, $mappingLease, $mandateId, null, $mandate);
+                        $changes['onboarding_status'] = $status === 'invalid' ? 'mandate_invalid' : 'pending_mandate';
+                        $category = $status;
+
+                        return;
+                    }
+                    // Scope filtering is supported even when this SDK version has no declared scopes property.
+                    $verifiedBeforeScopeCheck = $mandate;
+                    $scoped = $client->send(new GetPaginatedMandateRequest($payload['customerId'], from: $mandateId, limit: 1, scopes: ['customer-not-present']));
+                    foreach ($scoped as $candidate) {
+                        if ($candidate->id === $mandateId) {
+                            $this->assertMandate($candidate, $payload['customerId'], $attempt['environment'], $expected);
+                            unset($verifiedBeforeScopeCheck);
+                            $snapshots->snapshot($mapping, $client, $mappingLease, $mandateId, null, $candidate, true);
+                            if (!$candidate->isValid()) {
+                                $changes['mandate_status'] = $candidate->isInvalid() ? 'invalid' : 'pending';
+                                $changes['onboarding_status'] = $candidate->isInvalid() ? 'mandate_invalid' : 'pending_mandate';
+
+                                return;
+                            }
+                            $changes['onboarding_status'] = 'ready';
+                            $changes['mandate_verified_at'] = Support\Timestamps::now();
+
+                            return;
+                        }
+                    }
+                    throw new \UnexpectedValueException();
+                } catch (\Throwable $error) {
+                    if (isset($verifiedBeforeScopeCheck) && (new Repository\MandateRepository($attempts->connection))->find($mapping['id'], $mandateId) === null) {
+                        $snapshots->snapshot($mapping, $client, $mappingLease, $mandateId, null, $verifiedBeforeScopeCheck);
+                    }
+                    $snapshots->failedCheck($mapping, $mappingLease, $mandateId, null);
+                    throw $error;
+                }
+            });
         } catch (ProviderUnavailableException) {
             $changes = $this->onOutage($attempt);
             $category = 'provider_unavailable';

@@ -38,10 +38,15 @@ function molliePaymentContext(string $environment = 'test', ?string $databasePat
     $config->setNamingStrategy(new UnderscoreNamingStrategy(CASE_LOWER));
     $config->setProxyDir(sys_get_temp_dir());
     $config->setProxyNamespace('MolliePaymentsTestProxies');
-    $ctx->em = new EntityManager(DriverManager::getConnection($connectionParameters ?? ($databasePath === null ? ['driver' => 'pdo_sqlite', 'memory' => true] : ['driver' => 'pdo_sqlite', 'path' => $databasePath])), $config);
+    $parameters = $connectionParameters ?? ($databasePath === null ? ['driver' => 'pdo_sqlite', 'memory' => true] : ['driver' => 'pdo_sqlite', 'path' => $databasePath]);
+    $dbConfig = new Doctrine\DBAL\Configuration();
+    if (class_exists(FOSSBilling\Core\Doctrine\PaymentFenceMiddleware::class)) {
+        $dbConfig->setMiddlewares([new FOSSBilling\Core\Doctrine\PaymentFenceMiddleware($parameters['driver'])]);
+    }
+    $ctx->em = new EntityManager(DriverManager::getConnection($parameters, $dbConfig), $config);
     $ctx->db = $ctx->em->getConnection();
     $classes = [Client::class, ClientBalance::class, Currency::class, Invoice::class, InvoiceItem::class,
-        InvoiceEvent::class, PayGateway::class, Transaction::class, MolliePaymentAttempt::class, Box\Mod\Molliepayments\Entity\MollieCustomer::class, Box\Mod\Order\Entity\Order::class, Box\Mod\Order\Entity\OrderMeta::class];
+        InvoiceEvent::class, PayGateway::class, Transaction::class, MolliePaymentAttempt::class, Box\Mod\Molliepayments\Entity\MollieCustomer::class, Box\Mod\Molliepayments\Entity\MollieMandate::class, Box\Mod\Molliepayments\Entity\MollieMandateSystemAudit::class, Box\Mod\Molliepayments\Entity\MollieMandateAudit::class, Box\Mod\Order\Entity\Order::class, Box\Mod\Order\Entity\OrderMeta::class];
     if ($ctx->db->getDatabasePlatform() instanceof Doctrine\DBAL\Platforms\SQLitePlatform) {
         $ctx->db->executeStatement('PRAGMA busy_timeout = 5000');
     }
@@ -63,6 +68,9 @@ function molliePaymentContext(string $environment = 'test', ?string $databasePat
         (new SchemaTool($ctx->em))->createSchema($metadata);
     }
     $ctx->di['em'] = $ctx->em;
+    $pager = new FOSSBilling\Core\Pagination\Service();
+    $pager->setDi($ctx->di);
+    $ctx->di['pager'] = $pager;
     unset($ctx->di['dbal']);
     $ctx->di['dbal'] = $ctx->db;
     $ctx->di['api_system'] = new stdClass();
@@ -140,6 +148,8 @@ function molliePaymentContext(string $environment = 'test', ?string $databasePat
     $currency->shouldReceive('getCurrencyRepository')->andReturn($currencyRepo);
     $currency->shouldReceive('toBaseCurrency')->andReturnUsing(static fn ($code, $value) => (string) $value);
     $product = Mockery::mock(Box\Mod\Product\Service::class);
+    $product->shouldReceive('hasFreeDomainRenewal')->andReturn(false);
+    $product->shouldReceive('isFreeDomainRenewalOffered')->andReturn(false);
     $product->shouldReceive('commitReservedPromoRedemptionsForInvoice')->andReturnNull();
     $system = Mockery::mock(Box\Mod\System\Service::class);
     $system->shouldReceive('getParamValue')->with('invoice_number_padding')->andReturn(5);
@@ -148,6 +158,11 @@ function molliePaymentContext(string $environment = 'test', ?string $databasePat
         'client' => $ctx->clientService, 'client/balance' => $ctx->balanceService, 'currency' => $currency, 'product' => $product,
         'order' => Mockery::mock(Box\Mod\Order\Service::class), 'system' => $system,
         'invoice/subscription' => Mockery::mock(Box\Mod\Invoice\ServiceSubscription::class)];
+    if (class_exists(Box\Mod\Invoice\ServiceGatewayFees::class)) {
+        $fees = new Box\Mod\Invoice\ServiceGatewayFees();
+        $fees->setDi($ctx->di);
+        $ctx->services['invoice/gatewayfees'] = $fees;
+    }
     unset($ctx->di['mod_service']);
     $ctx->di['mod_service'] = $ctx->di->protect(static function (string $module, ?string $service = null) use ($ctx) {
         return $ctx->services[strtolower($module . ($service === null ? '' : '/' . $service))]

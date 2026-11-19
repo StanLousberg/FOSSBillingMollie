@@ -40,7 +40,7 @@ final class CustomerService
     }
 
     /** Trusted webhook path. Reads the committed attempt; never creates or impersonates a client. */
-    public function verifyOnboardingCustomer(string $attemptId): void
+    public function withOnboardingCustomer(string $attemptId, \Closure $operation): void
     {
         $attempt = (new Repository\AttemptRepository($this->customers->connection))->find($attemptId);
         $payload = json_decode($attempt['request'], true, 512, JSON_THROW_ON_ERROR);
@@ -52,9 +52,12 @@ final class CustomerService
             || $mapping['customer_id'] !== ($payload['customerId'] ?? null)) {
             throw new \Payment_Exception('Unverified onboarding Customer context.');
         }
-        if ($this->run((int) $attempt['client_id'], (int) $attempt['gateway_id'], false, true) !== $payload['customerId']) {
-            throw new \Payment_Exception('Onboarding Customer verification failed.');
-        }
+        $this->withVerifiedMapping($mapping['id'], static function (array $current, $client, string $lease) use ($mapping, $operation): void {
+            if ($current['customer_id'] !== $mapping['customer_id'] || $current['profile_id'] !== $mapping['profile_id']) {
+                throw new \Payment_Exception('Onboarding Customer context changed.');
+            }
+            $operation($current, $client, $lease);
+        });
     }
 
     /** Explicit operator recovery, authenticated GET only, never a replacement POST. */
@@ -66,6 +69,53 @@ final class CustomerService
 
         return $this->run($clientId, $gatewayId, false, true, [$mappingId, $customerId])
             ?? throw new \Payment_Exception('Customer mapping not found.');
+    }
+
+    /** Fail closed when saved gateway credentials/mode change during administration. */
+    public function assertSavedMapping(array $mapping): void
+    {
+        $gateway = $this->di['em']->find(PayGateway::class, (int) $mapping['gateway_id']);
+        if (!$gateway instanceof PayGateway) {
+            throw new \Payment_Exception('Customer gateway no longer exists.', [], 409);
+        }
+        $this->di['em']->refresh($gateway);
+        [$environment, $key] = $this->context((int) $mapping['gateway_id']);
+        $this->assertCredential($mapping, $key);
+        if ($environment !== $mapping['environment']) {
+            throw new \Payment_Exception('Customer environment changed.', [], 409);
+        }
+    }
+
+    /** Internal admin operation: verify an existing mapping, never create or reassign it. */
+    public function withVerifiedMapping(string $mappingId, \Closure $operation): mixed
+    {
+        $db = $this->customers->connection;
+        $row = $db->fetchAssociative('SELECT * FROM molliepayments_customer WHERE id = ?', [$mappingId]);
+        if (!$row || $row['status'] !== 'ready' || $row['customer_id'] === null) {
+            throw new \Payment_Exception('A verified existing Customer mapping is required.', [], 409);
+        }
+        $this->assertSavedMapping($row);
+        $this->run((int) $row['client_id'], (int) $row['gateway_id'], false, true);
+        $lease = bin2hex(random_bytes(16));
+        if (!$this->customers->acquire($mappingId, $lease)) {
+            throw new Support\ProviderUnavailableException('Customer operation already in progress. Retry later.', [], 409);
+        }
+        try {
+            $current = $this->customers->find((int) $row['client_id'], (int) $row['gateway_id'], $row['environment']);
+            if ($current === null || $current['status'] !== 'ready' || $current['customer_id'] !== $row['customer_id'] || $current['profile_id'] !== $row['profile_id']) {
+                throw new \Payment_Exception('Customer context changed. Reload and retry.', [], 409);
+            }
+            [$environment, $key] = $this->context((int) $row['gateway_id']);
+            $this->assertCredential($current, $key);
+            if ($environment !== $row['environment']) {
+                throw new \Payment_Exception('Customer environment changed.', [], 409);
+            }
+            $client = $this->provider(fn () => $this->clientFactory !== null ? ($this->clientFactory)($key) : MollieClientFactory::create($key));
+
+            return $operation($current, $client, $lease);
+        } finally {
+            $this->customers->release($mappingId, $lease);
+        }
     }
 
     private function run(int $clientId, int $gatewayId, bool $create, bool $verify, ?array $recovery = null): ?string
