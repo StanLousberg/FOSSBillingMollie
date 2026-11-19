@@ -520,3 +520,24 @@ Coverage includes paid title/price/config/company changes across v2/v3/v4; actua
 The first run exposed eight old expectations that treated live title/price/period changes as invalid historical evidence. The strict regressions were retained for unresolved creation/replay, while new positive historical lifecycle regressions cover known payments. Initial new-fixture failures used incorrect native domain configuration keys and compared raw SQLite float/string values; corrected native fixture data and existing repository normalization resolved them. No financial/idempotency test was skipped or removed to hide a failure.
 
 Remaining limits: v2/v3 never stored v4 hashes/snapshots, so their free-text fields depend on original database audit integrity; no retroactive hash or live-order reconstruction is invented. Current applicability is a derived native-state view, not permanent revocation history or permission to start a collection. Different intervals/new orders require fresh explicit consent; automatic future collection remains disabled. Real provider/browser validation was explicitly excluded from this task. Both reviewed lifecycle findings are resolved by code and isolated regression evidence, with no production-readiness claim.
+
+## Issue #9 administrator mandate management
+
+The extension manager opens the module ID when an admin controller exists. Its activation destination was missing from the controller route table. The base route and the mandate overview now share the same permission-checked handler. A regression exercises the native shared-controller route matcher.
+
+The pre-issue adapter at `cbfdb36` already failed on installed Core `a4ef052f1`. Its 654 unit/SQLite tests reported 43 errors and 18 failures, and its 46 MariaDB tests reported two errors and three failures. Module-owned fixtures now supply Core's payment-fence middleware when available, gateway transaction/locking contracts, fee and domain-renewal services, and the native transaction timestamp type. An independent reader checks persisted ownership and accounting after Core closes an EntityManager on rollback. The original financial assertions still apply.
+
+| Core revision | Unit / SQLite | MariaDB |
+| --- | --- | --- |
+| Installed `a4ef052f1` | 736 passed, 7,011 assertions | 49 passed, 662 assertions |
+| Isolated preview `fb0e766d2` | 736 passed, 7,011 assertions | 49 passed, 662 assertions |
+
+Both runs used PHP 8.3.30 and SDK fakes. Chromium verified HTTP 302 redirects to staff login for anonymous requests to the root, overview and detail on local DDEV. Authenticated browser activation, role-specific navigation and interactive layout checks remain outstanding. See [admin acceptance steps](ADMIN_MANDATES.md#manual-admin-acceptance-checklist).
+
+### Revised issue #9 dashboard
+
+Chromium logged in through the native staff form on DDEV Core `a4ef052f1`. The activated module destination redirected to extension settings. Both 1360 × 900 and 390 × 900 viewports were checked through the settings link, the default customer overview, expanded customer groups, mapping detail, all mandates, the second mandate page, attention view, mandate detail and revocation dialog. The test used two suspended fixture customers and 27 synthetic Test snapshots. Submitting a targeted refresh against the fixture's deliberately unmatched credential context exercised the failure message after reload without contacting Mollie. No destructive provider action was submitted in the browser.
+
+The initial mobile filters occupied the first screen. Collapsing them put both customer rows in view. Screenshots of the revised pages showed wrapped badges, visible modal confirmation and no horizontal page overflow at either width. Filtering a nonexistent mandate produced the empty state. The native pager showed 25 rows on the first mandate page and two on the second. The SDK-faked suites exercise successful revocation, provider rejection, lost responses and concurrent retries.
+
+Final run on the installed host: 734 SQLite/unit tests (7,007 assertions) and 50 MariaDB integration tests (676 assertions) passed. The PHP style dry run found no changes across 73 files. The unit log still contains PHP warnings from incomplete fake SDK error bodies and an uninitialized request-list property in an older client fixture. Production readiness and a fresh public Mollie webhook were outside this validation run.

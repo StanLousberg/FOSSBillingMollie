@@ -64,7 +64,7 @@ Start the existing DDEV project with `ddev start`. For a new host, complete FOSS
 
 ## Activate and upgrade
 
-Activate MolliePayments under **Extensions** and add its gateway under **Payment Gateways**. Installation creates the module-owned attempt table. For an existing module installation, run from the host root:
+Activate MolliePayments under **Extensions** and add its gateway under **Payment Gateways**. Installation creates the module-owned attempt and Customer tables. Issue #9 also creates mandate metadata and administration audit tables; existing installations must run the additive migration before using mandate administration. For an existing module installation, run from the host root:
 
 ```bash
 ddev exec php src/modules/Molliepayments/bin/migrate.php /var/www/html/src
@@ -144,3 +144,7 @@ Themes without custom integration retain the normal flow. See [CUSTOM_CART_CHECK
 The supported Core must provide native `NamedLock::acquire()/release()` and `AfterAdminCronRunEvent` listener discovery. The active module uses that event for at most five settled mandate checks or expirations per run. Within seven days from attempt creation, checks have a five-minute cooldown; at the inclusive seven-day deadline a pending record becomes `manual_review` once its lease is available. Retries read the original processed transaction and authenticated Mollie resources, without creating native transactions, payment events, payments or Customers. No schema migration is introduced.
 
 Readiness requires the Payment's explicit mandate ID/link; a matching payment instrument or Customer-level list is insufficient. Merchants whose provider response never exposes that relation need manual provider investigation. See [the final corrections and recovery procedure](PR18_FINAL_FIXES.md). Browser E2E was excluded from this correction round because of the known upstream CSRF/session issue; no workaround or Core change is included. Automatic collection remains disabled.
+
+## Administrator mandate management
+
+After the additive migration, open **Extensions → MolliePayments mandates**. Grant module access, `molliepayments.view_mandates` and `client.view`; grant `sync_mandates` and `revoke_mandates` separately as needed. No core theme changes or client management endpoints are installed. Read [ADMIN_MANDATES.md](ADMIN_MANDATES.md) before refreshing or revoking a mandate, particularly the uncertain-outcome and customer-consent limitations.
