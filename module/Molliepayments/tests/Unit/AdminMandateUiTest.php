@@ -60,7 +60,7 @@ test('native Twig renders filtered mandate overview details audit and confirmati
     $dom = new DOMDocument();
     $dom->loadHTML($overview, LIBXML_NOERROR | LIBXML_NOWARNING);
     $xpath = new DOMXPath($dom);
-    $group = $xpath->query('//details[@id="customer-' . $ctx->client->getId() . '"]')->item(0);
+    $group = $xpath->query('//div[@id="customer-' . $ctx->client->getId() . '"]')->item(0);
     expect($group->textContent)->toContain('mdt_disposable')->not->toContain('mdt_another');
     $detail = $twig->render('mod_molliepayments_mandate.html.twig', $vars);
     expect($overview)->toContain('mdt_disposable', 'cst_disposable', 'name="environment"', 'name="customer"', 'Page', 'valid', '&lt;script&gt;unsafe&lt;/script&gt;')

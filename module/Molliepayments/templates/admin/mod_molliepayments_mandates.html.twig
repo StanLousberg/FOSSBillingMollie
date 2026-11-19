@@ -13,47 +13,50 @@
         <nav class="nav nav-tabs mb-3" aria-label="Mandate views">{% for view, label in {customers: 'Customers', mandates: 'All mandates', attention: 'Needs attention'} %}<a class="nav-link {{ filters.view == view ? 'active' : '' }}" href="{{ 'molliepayments/mandates'|url }}?{{ filters|merge({view: view})|url_encode }}">{{ label|trans }}</a>{% endfor %}</nav>
 
         {% if result.environment == 'unconfigured' %}<p class="alert alert-warning">No unique enabled gateway. Select an environment to browse historical records.</p>{% endif %}
-        <p>{{ 'Mandates appear after Mollie verifies a first payment. Status reflects the last provider check.'|trans }}</p>
-        <details id="mandate-filters" {{ filters.customer or filters.mandate or filters.method or filters.status or filters.attention ? 'open' }}>
-        <summary class="fw-semibold">{{ 'Search and filters'|trans }}</summary>
-        <form method="get"  action="{{ 'molliepayments/mandates'|url }}" class="row g-3 mt-1">
+        <form method="get" id="mandate-filters" action="{{ 'molliepayments/mandates'|url }}" class="row g-2" aria-label="{{ 'Search and filters'|trans }}">
             <input type="hidden" name="view" value="{{ filters.view }}">
-            <div class="col-md-3"><label class="form-label" for="customer">{{ 'Customer name, email or ID'|trans }}</label><input class="form-control" id="customer" name="customer" value="{{ filters.customer }}" maxlength="128"></div>
-            <div class="col-md-3"><label class="form-label" for="mandate">{{ 'Mandate ID'|trans }}</label><input class="form-control" id="mandate" name="mandate" value="{{ filters.mandate }}" maxlength="128"></div>
-            <div class="col-md-2"><label class="form-label" for="status">{{ 'Provider status'|trans }}</label><select class="form-select" id="status" name="status">
+            <div class="col-6 col-lg-3"><label class="form-label" for="customer">{{ 'Customer'|trans }}</label><input class="form-control" id="customer" name="customer" placeholder="{{ 'Name, email or ID'|trans }}" value="{{ filters.customer }}" maxlength="128"></div>
+            <div class="col-6 col-lg-3"><label class="form-label" for="mandate">{{ 'Mandate ID'|trans }}</label><input class="form-control" id="mandate" name="mandate" value="{{ filters.mandate }}" maxlength="128"></div>
+            <div class="col-6 col-lg-3"><label class="form-label" for="status">{{ 'Provider status'|trans }}</label><select class="form-select" id="status" name="status">
                 {% for value in ['', 'valid', 'pending', 'invalid', 'missing', 'unknown'] %}<option value="{{ value }}" {{ filters.status == value ? 'selected' : '' }}>{{ value == '' ? 'All'|trans : value }}</option>{% endfor %}
             </select></div>
-            <div class="col-md-2"><label class="form-label" for="environment">{{ 'Environment'|trans }}</label><select class="form-select" id="environment" name="environment">
+            <div class="col-6 col-lg-3"><label class="form-label" for="environment">{{ 'Environment'|trans }}</label><select class="form-select" id="environment" name="environment">
                 {% for value in ['', 'test', 'live', 'all'] %}<option value="{{ value }}" {{ result.environment == value ? 'selected' : '' }}>{{ value == '' ? 'Gateway default'|trans : value|capitalize }}</option>{% endfor %}
             </select></div>
-            <div class="col-md-3"><label class="form-label" for="method">{{ 'Payment method'|trans }}</label><input class="form-control" name="method" id="method" value="{{ filters.method }}"></div>
-            <div class="col-md-3"><label class="form-label" for="attention">{{ 'Verification'|trans }}</label><select name="attention" id="attention" class="form-select">{% for value, label in {'': 'All checks', failed: 'Failed check', stale: 'Older than 24 hours', revocation: 'Unresolved revocation', unverified: 'Never verified'} %}<option value="{{ value }}" {{ filters.attention == value ? 'selected' }}>{{ label|trans }}</option>{% endfor %}</select></div>
-            <div class="col-md-3"><label class="form-label" for="sort">{{ 'Customer order'|trans }}</label><select id="sort" name="sort" class="form-select">{% for value, label in {name_asc: 'Name A–Z', name_desc: 'Name Z–A'} %}<option value="{{ value }}" {{ filters.sort == value ? 'selected' }}>{{ label|trans }}</option>{% endfor %}</select></div>
-            <div class="col-md-2 align-self-end"><button type="submit" class="btn btn-primary">{{ 'Filter'|trans }}</button></div>
-        </form></details>
+            <div class="col-6 col-lg-3"><label class="form-label" for="method">{{ 'Payment method'|trans }}</label><input class="form-control" name="method" id="method" value="{{ filters.method }}"></div>
+            <div class="col-6 col-lg-3"><label class="form-label" for="attention">{{ 'Verification'|trans }}</label><select name="attention" id="attention" class="form-select">{% for value, label in {'': 'All checks', failed: 'Failed check', stale: 'Older than 24 hours', revocation: 'Unresolved revocation', unverified: 'Never verified'} %}<option value="{{ value }}" {{ filters.attention == value ? 'selected' }}>{{ label|trans }}</option>{% endfor %}</select></div>
+            <div class="col-6 col-lg-3"><label class="form-label" for="sort">{{ 'Customer order'|trans }}</label><select id="sort" name="sort" class="form-select">{% for value, label in {name_asc: 'Name A–Z', name_desc: 'Name Z–A'} %}<option value="{{ value }}" {{ filters.sort == value ? 'selected' }}>{{ label|trans }}</option>{% endfor %}</select></div>
+            <div class="col-6 col-lg-3 align-self-end"><button type="submit" class="btn btn-primary">{{ 'Filter'|trans }}</button></div>
+        </form>
         <p class="mt-3 mb-0" role="status" aria-live="polite" data-mandate-result></p>
     </div>
-    {% for customer, rows in (filters.view == 'customers' ? result.groups : [result.list]) %}
-        {% if filters.view == 'customers' %}
-        <details class="border-top" id="customer-{{ customer }}"><summary class="p-3 fw-semibold">{{ rows[0].first_name }} {{ rows[0].last_name }} <span class="text-muted">#{{ customer }} · {{ rows|filter(row => row.mandate_id)|length }} {{ 'mandates'|trans }}</span>
-            {% if rows|filter(row => row.mandate_id and (row.status != 'valid' or row.error or row.revocation in ['requested', 'rejected']))|length %}<span class="badge bg-warning-lt">{{ 'Needs attention'|trans }}</span>{% elseif rows|filter(row => row.aged)|length %}<span class="badge bg-secondary-lt">{{ 'Historical'|trans }}</span>{% endif %}
-        </summary>
-        {% endif %}
-        {% for row in rows %}
-        <div class="px-3 py-2 border-top d-flex flex-wrap align-items-center gap-2">
-            {% if filters.view != 'customers' or loop.first or rows[loop.index0 - 1].mapping_id != row.mapping_id %}
-            <a href="{{ ('molliepayments/customers/' ~ row.mapping_id)|url }}">{{ row.first_name }} {{ row.last_name }} · {{ row.customer_id|slice(0, 16) }}</a>
-            {% endif %}
-            {% if row.mandate_id %}
-            <span>{{ row.summary|default(row.method) }}</span>
-            {% include 'mod_molliepayments_mandate_status.html.twig' with {status: row.status, revocation: row.revocation, error: row.error, aged: row.aged} only %}
-            <a class="ms-md-auto" href="{{ ('molliepayments/mandates/' ~ row.mapping_id ~ '/' ~ row.mandate_id)|url }}">{{ row.mandate_id }}</a>
-            {% else %}<span class="text-muted">{{ 'No verified mandates'|trans }}</span>{% endif %}
-            <span class="text-muted">{{ row.environment|capitalize }}</span>
-        </div>
-        {% else %}<p class="p-3">{{ 'No matching mandates. Change the filters.'|trans }}</p>{% endfor %}
-        {% if filters.view == 'customers' %}</details>{% endif %}
-    {% else %}<p class="p-3">{{ 'No matching Customer mappings. Listing never creates a customer.'|trans }}</p>{% endfor %}
+    {% if filters.view == 'customers' %}
+    <div class="table-responsive"><table class="table table-vcenter card-table mb-0">
+        <thead><tr><th scope="col">{{ 'Customer'|trans }}</th><th scope="col">{{ 'Status'|trans }}</th><th scope="col" class="text-end">{{ 'Mandates'|trans }}</th></tr></thead>
+        <tbody>
+        {% for customer, rows in result.groups %}
+            {% set count = rows|filter(row => row.mandate_id)|length %}
+            <tr>
+                <th scope="row"><a href="{{ ('client/manage/' ~ customer)|url }}">{{ rows[0].first_name }} {{ rows[0].last_name }}</a><div class="small text-muted">#{{ customer }}</div></th>
+                <td>{% if rows|filter(row => row.mandate_id and (row.status != 'valid' or row.error or row.revocation in ['requested', 'rejected']))|length %}
+                    <span class="badge bg-warning-lt">{{ 'Needs attention'|trans }}</span>
+                {% elseif rows|filter(row => row.aged)|length %}<span class="badge bg-secondary-lt">{{ 'Historical'|trans }}</span>
+                {% elseif count %}<span class="badge bg-success-lt">{{ 'Valid'|trans }}</span>
+                {% else %}<span class="text-muted">{{ 'No mandates'|trans }}</span>{% endif %}</td>
+                <td class="text-end"><button class="btn btn-sm btn-outline-secondary" type="button" data-bs-toggle="collapse" data-bs-target="#customer-{{ customer }}" aria-controls="customer-{{ customer }}" aria-expanded="false" aria-label="{{ 'Show mandates for'|trans }} {{ rows[0].first_name }} {{ rows[0].last_name }}">{{ count }} <span aria-hidden="true">▾</span></button></td>
+            </tr>
+            <tr><td colspan="3" class="p-0 border-0"><div class="collapse" id="customer-{{ customer }}"><div class="p-2 bg-body-tertiary">
+                {% for row in rows %}
+                    {% if loop.first or rows[loop.index0 - 1].mapping_id != row.mapping_id %}
+                        <a class="d-inline-block mx-2 mb-2" href="{{ ('molliepayments/customers/' ~ row.mapping_id)|url }}">{{ row.customer_id }} · {{ row.environment|capitalize }}</a>
+                    {% endif %}
+                {% endfor %}
+                {{ _self.mandates(rows|filter(row => row.mandate_id), false) }}
+            </div></div></td></tr>
+        {% else %}<tr><td colspan="3" class="text-muted">{{ 'No matching Customer mappings. Listing never creates a customer.'|trans }}</td></tr>{% endfor %}
+        </tbody>
+    </table></div>
+    {% else %}{{ _self.mandates(result.list, true) }}{% endif %}
     <div class="card-footer d-flex justify-content-between">
         <span>{% if result.pages %}{{ 'Page'|trans }} {{ result.page }} / {{ result.pages }} · {% endif %}{{ result.total }} {{ 'records'|trans }}</span>
         <div>{% if result.page > 1 %}<a class="btn btn-sm btn-outline-secondary" href="{{ 'molliepayments/mandates'|url }}?{{ filters|merge({page: result.page - 1})|url_encode }}">{{ 'Previous'|trans }}</a>{% endif %}
@@ -62,3 +65,16 @@
 </div>
 {% endblock %}
 {% block js %}{{ parent() }}{% include 'mod_molliepayments_mandate_actions.html.twig' %}{% endblock %}
+
+{% macro mandates(rows, show_customer) %}
+<div class="table-responsive"><table class="table table-vcenter mb-0">
+    <thead><tr><th scope="col">{{ 'Mandate'|trans }}</th>{% if show_customer %}<th scope="col">{{ 'Customer'|trans }}</th>{% endif %}<th scope="col">{{ 'Status at last check'|trans }}</th></tr></thead>
+    <tbody>{% for row in rows %}
+        <tr>
+            <th scope="row"><a href="{{ ('molliepayments/mandates/' ~ row.mapping_id ~ '/' ~ row.mandate_id)|url }}">{{ row.mandate_id }}</a><div class="small text-muted">{{ row.summary|default(row.method) }} · {{ row.environment|capitalize }}</div></th>
+            {% if show_customer %}<td><a href="{{ ('molliepayments/customers/' ~ row.mapping_id)|url }}">{{ row.first_name }} {{ row.last_name }}</a></td>{% endif %}
+            <td>{% include 'mod_molliepayments_mandate_status.html.twig' with {status: row.status, revocation: row.revocation, error: row.error, aged: row.aged, compact: true} only %}</td>
+        </tr>
+    {% else %}<tr><td colspan="{{ show_customer ? 3 : 2 }}" class="text-muted">{{ 'No matching mandates.'|trans }}</td></tr>{% endfor %}</tbody>
+</table></div>
+{% endmacro %}
