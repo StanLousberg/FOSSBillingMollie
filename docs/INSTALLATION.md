@@ -148,3 +148,7 @@ Readiness requires the Payment's explicit mandate ID/link; a matching payment in
 ## Administrator mandate management
 
 After the additive migration, open **Extensions → MolliePayments customers and mandates**. Grant module access, `molliepayments.view_mandates` and `client.view`; grant `sync_mandates` and `revoke_mandates` separately as needed. No core theme changes or client management endpoints are installed. Read [ADMIN_MANDATES.md](ADMIN_MANDATES.md) before refreshing or revoking a mandate, particularly the uncertain-outcome and customer-consent limitations.
+
+## Client deletion
+
+Before enabling version 0.3.1, run the module migration command above. It adds the nullable UTC column `deletion_due_at` to the Customer mapping. Existing orphaned mappings are outside this upgrade. Keep the module active and native cron running for cleanup retries. The supported host must dispatch the native before- and after-admin-client-delete events for individual and bulk deletion.

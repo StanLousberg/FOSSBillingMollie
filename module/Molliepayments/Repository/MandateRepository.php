@@ -70,7 +70,7 @@ final class MandateRepository
 
     public function overview(array $filters, int $page, \FOSSBilling\Core\Pagination\Service $pager): array
     {
-        $where = ['c.customer_id IS NOT NULL'];
+        $where = ['c.customer_id IS NOT NULL', "c.status <> 'deleted'"];
         $params = [];
         $grouped = ($filters['view'] ?? '') === 'customers';
         $attentionCondition = "(m.status <> 'valid' OR m.error IS NOT NULL OR m.verified_at IS NULL OR m.verified_at <= ? OR m.revocation IN ('requested', 'rejected'))";

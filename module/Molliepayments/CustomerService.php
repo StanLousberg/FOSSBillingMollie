@@ -9,7 +9,10 @@ use Box\Mod\Invoice\Entity\PayGateway;
 use Box\Mod\Molliepayments\Repository\CustomerRepository;
 use Box\Mod\Molliepayments\Support\Credentials;
 use Box\Mod\Molliepayments\Support\MollieClientFactory;
+use Mollie\Api\Exceptions\ApiException;
+use Mollie\Api\Http\LinearRetryStrategy;
 use Mollie\Api\Http\Requests\CreateCustomerRequest;
+use Mollie\Api\Http\Requests\DeleteCustomerRequest;
 use Mollie\Api\Http\Requests\GetCurrentProfileRequest;
 use Mollie\Api\Http\Requests\GetCustomerRequest;
 use Mollie\Api\MollieApiClient;
@@ -58,6 +61,75 @@ final class CustomerService
             }
             $operation($current, $client, $lease);
         });
+    }
+
+    public function prepareDeletion(int $clientId): void
+    {
+        $db = $this->customers->connection;
+        if ($db->fetchOne('SELECT id FROM molliepayments_customer WHERE client_id = ? AND customer_id IS NULL', [$clientId])) {
+            throw new \Payment_Exception('Resolve the pending Mollie Customer creation before deleting this client.', [], 409);
+        }
+        $db->executeStatement("UPDATE molliepayments_customer SET deletion_due_at = ? WHERE client_id = ? AND status <> 'deleted'", [Support\Timestamps::now(), $clientId]);
+    }
+
+    public function deletePending(?int $clientId = null): void
+    {
+        $db = $this->customers->connection;
+        if ($db->isTransactionActive()) {
+            throw new \Payment_Exception('Customer deletion requires a committed database connection.');
+        }
+        if ($clientId !== null) {
+            // Include mappings reserved between the before-delete event and the native client row lock.
+            $db->executeStatement("UPDATE molliepayments_customer SET deletion_due_at = ? WHERE client_id = ? AND deletion_due_at IS NULL AND status <> 'deleted'", [Support\Timestamps::now(), $clientId]);
+        }
+        $query = 'SELECT c.id FROM molliepayments_customer c WHERE c.deletion_due_at <= ? AND NOT EXISTS (SELECT 1 FROM client n WHERE n.id = c.client_id)';
+        $ids = $clientId === null
+            ? $db->fetchFirstColumn($query . ' ORDER BY c.deletion_due_at, c.id LIMIT 25', [Support\Timestamps::now()])
+            : $db->fetchFirstColumn($query . ' AND c.client_id = ?', [Support\Timestamps::now(), $clientId]);
+        foreach ($ids as $id) {
+            $lease = bin2hex(random_bytes(16));
+            if (!$this->customers->acquire($id, $lease)) {
+                continue;
+            }
+            try {
+                $row = $db->fetchAssociative('SELECT * FROM molliepayments_customer WHERE id = ? AND deletion_due_at IS NOT NULL AND NOT EXISTS (SELECT 1 FROM client WHERE id = molliepayments_customer.client_id)', [$id]);
+                if (!$row) {
+                    continue;
+                }
+                $this->deleteProviderCustomer($row);
+                $this->customers->update($id, $lease, ['status' => 'deleted', 'deletion_due_at' => null, 'error' => null]);
+            } catch (\Throwable) {
+                $this->customers->update($id, $lease, ['status' => 'deletion_pending', 'error' => 'customer_deletion_pending', 'deletion_due_at' => Support\Timestamps::now(900)]);
+            } finally {
+                $this->customers->release($id, $lease);
+            }
+        }
+    }
+
+    private function deleteProviderCustomer(array $row): void
+    {
+        if (!$this->validCustomerId($row['customer_id'] ?? '')) {
+            throw new \Payment_Exception('Unresolved Mollie Customer identity.');
+        }
+        [, $key] = $this->context((int) $row['gateway_id'], $row['environment']);
+        $this->assertCredential($row, $key);
+        $client = $this->clientFactory !== null ? ($this->clientFactory)($key) : MollieClientFactory::create($key);
+        $client->setRetryStrategy(new LinearRetryStrategy(maxRetries: 0));
+        $profile = $client->send(new GetCurrentProfileRequest());
+        if (!$profile instanceof CurrentProfile || $profile->resource !== 'profile' || $profile->id !== $row['profile_id']) {
+            throw new \Payment_Exception('Customer profile mismatch.');
+        }
+        try {
+            $customer = $client->send(new GetCustomerRequest($row['customer_id']));
+            $this->assertCustomerIdentity($customer, $row, $row['customer_id']);
+            if ($client->send(new DeleteCustomerRequest($row['customer_id']))->status() !== 204) {
+                throw new \Payment_Exception('Unexpected Mollie Customer deletion response.');
+            }
+        } catch (ApiException $error) {
+            if ($error->getStatusCode() !== 404) {
+                throw $error;
+            }
+        }
     }
 
     /** Explicit operator recovery, authenticated GET only, never a replacement POST. */
@@ -195,13 +267,7 @@ final class CustomerService
                 } else {
                     $customer = $this->provider(fn () => $client->send(new GetCustomerRequest($providerId)));
                 }
-                $metadata = $customer instanceof Customer ? (array) ($customer->metadata ?? []) : [];
-                if (!$customer instanceof Customer || $customer->resource !== 'customer' || !isset($customer->id, $customer->mode)
-                    || !$this->validCustomerId($customer->id) || $customer->mode !== $environment
-                    || ($providerId !== null && $customer->id !== $providerId)
-                    || $metadata !== json_decode($row['request'], true, 512, JSON_THROW_ON_ERROR)['metadata']) {
-                    throw new \Payment_Exception('Mollie Customer identity verification failed. Operator recovery required.');
-                }
+                $this->assertCustomerIdentity($customer, $row, $providerId);
                 $this->customers->update($row['id'], $lease, ['customer_id' => $customer->id, 'status' => 'ready', 'error' => null]);
 
                 return $customer->id;
@@ -224,13 +290,13 @@ final class CustomerService
         }
     }
 
-    private function context(int $gatewayId): array
+    private function context(int $gatewayId, ?string $savedEnvironment = null): array
     {
         $gateway = $gatewayId > 0 ? $this->di['em']->find(PayGateway::class, $gatewayId) : null;
-        if (!$gateway instanceof PayGateway || $gateway->getGateway() !== 'MolliePayments' || !$gateway->isEnabled()) {
+        if (!$gateway instanceof PayGateway || $gateway->getGateway() !== 'MolliePayments' || ($savedEnvironment === null && !$gateway->isEnabled())) {
             throw new \Payment_Exception('Invalid or disabled MolliePayments gateway.');
         }
-        $environment = $gateway->isTestMode() ? 'test' : 'live';
+        $environment = $savedEnvironment ?? ($gateway->isTestMode() ? 'test' : 'live');
         try {
             $adapter = $this->di['mod_service']('Invoice', 'PayGateway')->getPaymentAdapter($gateway);
             if (!$adapter instanceof \Payment_Adapter_MolliePayments) {
@@ -244,6 +310,18 @@ final class CustomerService
         }
     }
 
+    private function assertCustomerIdentity(mixed $customer, array $row, ?string $expectedId): void
+    {
+        $metadata = ['molliepayments_customer' => $row['id']];
+        if (!$customer instanceof Customer || $customer->resource !== 'customer' || !isset($customer->id, $customer->mode)
+            || !$this->validCustomerId($customer->id) || $customer->mode !== $row['environment']
+            || ($expectedId !== null && $customer->id !== $expectedId)
+            || (array) ($customer->metadata ?? []) !== $metadata
+            || (json_decode($row['request'], true, 512, JSON_THROW_ON_ERROR)['metadata'] ?? null) !== $metadata) {
+            throw new \Payment_Exception('Mollie Customer identity verification failed. Operator recovery required.');
+        }
+    }
+
     private function validCustomerId(string $id): bool
     {
         return (bool) preg_match('/^cst_[A-Za-z0-9]{1,251}$/D', $id);
@@ -253,7 +331,7 @@ final class CustomerService
     {
         try {
             return $request();
-        } catch (\Mollie\Api\Exceptions\ApiException $error) {
+        } catch (ApiException $error) {
             if (!in_array($error->getStatusCode(), [408, 429], true) && $error->getStatusCode() < 500) {
                 throw new \Payment_Exception('Mollie Customer request was rejected. Verify the saved context.');
             }

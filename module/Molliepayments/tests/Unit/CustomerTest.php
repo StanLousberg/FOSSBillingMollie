@@ -134,7 +134,8 @@ test('customer denies cross client and unauthenticated access before network or 
 test('customer test and live mappings stay isolated and select only their saved key', function (): void {
     $ctx = mollieCustomers(molliePaymentContext());
     mollieResolveCustomer($ctx);
-    $ctx->gateway->setTestMode(false)->setConfig(mollieGatewayValue('config', ['api_key' => mollieDummyKey('live'), 'test_api_key' => $ctx->key]));
+    $keys = ['test' => $ctx->key, 'live' => mollieDummyKey('live')];
+    $ctx->gateway->setTestMode(false)->setConfig(mollieGatewayValue('config', ['api_key' => $keys['live'], 'test_api_key' => $ctx->key]));
     $ctx->em->flush();
     expect(mollieResolveCustomer($ctx, false))->toBeNull();
     // Provider ID must differ between modes, as in the real API.
@@ -148,6 +149,23 @@ test('customer test and live mappings stay isolated and select only their saved 
     };
     expect(mollieResolveCustomer($ctx))->toBe('cst_live')
         ->and((int) $ctx->db->fetchOne('SELECT COUNT(*) FROM molliepayments_customer'))->toBe(2);
+    $customers = [];
+    foreach ($ctx->db->fetchAllAssociative('SELECT * FROM molliepayments_customer') as $mapping) {
+        $customers[$mapping['customer_id']] = ['resource' => 'customer', 'id' => $mapping['customer_id'], 'mode' => $mapping['environment'],
+            'metadata' => ['molliepayments_customer' => $mapping['id']]];
+    }
+    $ctx->customerResponses[GetCustomerRequest::class] = static function ($pending) use ($customers, $keys) {
+        $request = $pending->createPsrRequest();
+        $customer = $customers[basename($request->getUri()->getPath())];
+        expect($request->getHeaderLine('Authorization'))->toBe('Bearer ' . $keys[$customer['mode']]);
+
+        return MockResponse::ok($customer);
+    };
+    $ctx->customerResponses[Mollie\Api\Http\Requests\DeleteCustomerRequest::class] = MockResponse::noContent();
+    $ctx->customers->prepareDeletion($ctx->client->getId());
+    $ctx->db->delete('client', ['id' => $ctx->client->getId()]);
+    $ctx->customers->deletePending();
+    expect((int) $ctx->db->fetchOne("SELECT COUNT(*) FROM molliepayments_customer WHERE status = 'deleted'"))->toBe(2);
 });
 
 test('customer reservation and lease serialize competing requests and fence stale workers', function (): void {
@@ -344,4 +362,52 @@ test('customer verification rejects a wrong resource type', function (): void {
     $ctx->customerResponse['resource'] = 'payment';
     expect(fn () => mollieResolveCustomer($ctx, false, true))->toThrow(Payment_Exception::class)
         ->and(mollieCustomerRow($ctx)['status'])->toBe('blocked');
+});
+
+test('client deletion verifies the scoped customer and retries only after native deletion', function (string $outcome): void {
+    $ctx = mollieCustomers(molliePaymentContext());
+    mollieResolveCustomer($ctx);
+    $id = $ctx->client->getId();
+    $row = mollieCustomerRow($ctx);
+    $ctx->customers->prepareDeletion($id);
+    $ctx->customerRequests = [];
+    $ctx->customers->deletePending();
+    expect($ctx->customerRequests)->toBe([]);
+    $ctx->db->delete('client', ['id' => $id]);
+
+    $deletes = 0;
+    $ctx->customerResponses[Mollie\Api\Http\Requests\DeleteCustomerRequest::class] = static function ($pending) use (&$deletes, $outcome) {
+        ++$deletes;
+        expect($pending->createPsrRequest()->getUri()->getPath())->toEndWith('/customers/cst_disposable');
+
+        return $outcome === 'outage' && $deletes === 1 ? new MockResponse(['status' => 503, 'title' => 'Unavailable', 'detail' => 'temporary'], 503) : MockResponse::noContent();
+    };
+    if ($outcome === 'absent') {
+        $ctx->customerResponses[GetCustomerRequest::class] = new MockResponse(['status' => 404, 'title' => 'Not found', 'detail' => 'absent'], 404);
+    } elseif ($outcome === 'foreign') {
+        $ctx->customerResponse = mollieCustomerResponse($ctx);
+        $ctx->customerResponse['metadata'] = ['molliepayments_customer' => 'different'];
+    }
+    $ctx->customers->deletePending($id);
+    if (in_array($outcome, ['foreign', 'outage'], true)) {
+        expect(mollieCustomerRow($ctx)['error'])->toBe('customer_deletion_pending')
+            ->and($deletes)->toBe($outcome === 'outage' ? 1 : 0);
+        $ctx->customerResponse = null;
+        $ctx->db->update('molliepayments_customer', ['deletion_due_at' => Box\Mod\Molliepayments\Support\Timestamps::now(-1)], ['id' => $row['id']]);
+        $ctx->customers->deletePending();
+    }
+    expect(mollieCustomerRow($ctx)['status'])->toBe('deleted')
+        ->and(mollieCustomerRow($ctx)['deletion_due_at'])->toBeNull();
+    $ctx->customers->deletePending($id);
+    expect($deletes)->toBe(match ($outcome) {
+        'absent' => 0, 'outage' => 2, default => 1,
+    });
+})->with(['success', 'absent', 'foreign', 'outage']);
+
+test('native client deletion requires unresolved customer creation to be reconciled', function (): void {
+    $ctx = mollieCustomers(molliePaymentContext());
+    mollieResolveCustomer($ctx);
+    $ctx->db->update('molliepayments_customer', ['customer_id' => null, 'status' => 'creating'], ['id' => mollieCustomerRow($ctx)['id']]);
+    $dispatcher = new FOSSBilling\Core\Events\EventDispatcher(static fn () => ['Molliepayments'], static fn () => $ctx->services['molliepayments']);
+    expect(fn () => $dispatcher->dispatch(new Box\Mod\Client\Event\BeforeAdminClientDeleteEvent($ctx->client->getId())))->toThrow(Payment_Exception::class, 'Resolve the pending Mollie Customer');
 });

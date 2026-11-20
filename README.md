@@ -16,6 +16,8 @@ The recurring authorization page names your configured company and lists each re
 
 Gateway payment modes (`both`, `one_time_only`, `recurring_only`) are configured natively. Custom themes can submit explicit consent after native cart checkout and continue straight to Mollie; see the [theme integration contract and example](docs/CUSTOM_CART_CHECKOUT.md). Automatic renewal collection remains disabled.
 
+Deleting a client through FOSSBilling administration also removes the Mollie Customers linked by this module. See [Customer deletion and retries](docs/PAYMENTS.md#client-deletion).
+
 ## Development setup
 
 Requirements: PHP 8.3+, Composer 2, FOSSBilling development baseline `7bc90195a535a03d33b4d0db91f41ba6989dee8a`, and a Mollie Test key for real checkout validation. Published FOSSBilling 0.8.9 is unsupported. CI also tests current upstream `main` with SQLite and MariaDB.

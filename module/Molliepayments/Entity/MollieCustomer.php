@@ -60,4 +60,7 @@ class MollieCustomer
 
     #[ORM\Column(length: 32, nullable: true)]
     public ?string $error = null;
+
+    #[ORM\Column(type: Types::DATETIME_IMMUTABLE, nullable: true)]
+    public ?\DateTimeImmutable $deletionDueAt = null;
 }

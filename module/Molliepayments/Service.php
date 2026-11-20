@@ -103,6 +103,24 @@ final class Service implements InjectionAwareInterface
         $this->payments()->retryPendingMandates();
     }
 
+    #[\Symfony\Component\EventDispatcher\Attribute\AsEventListener]
+    public function prepareCustomerDeletion(\Box\Mod\Client\Event\BeforeAdminClientDeleteEvent $event): void
+    {
+        $this->customers()->prepareDeletion($event->clientId);
+    }
+
+    #[\Symfony\Component\EventDispatcher\Attribute\AsEventListener]
+    public function finishCustomerDeletion(\Box\Mod\Client\Event\AfterAdminClientDeleteEvent $event): void
+    {
+        $this->customers()->deletePending($event->clientId);
+    }
+
+    #[\Symfony\Component\EventDispatcher\Attribute\AsEventListener]
+    public function retryCustomerDeletions(\Box\Mod\Cron\Event\AfterAdminCronRunEvent $event): void
+    {
+        $this->customers()->deletePending();
+    }
+
     public function customers(): CustomerService
     {
         return new CustomerService($this->di);

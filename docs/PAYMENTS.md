@@ -239,3 +239,9 @@ Operators should inspect the original attempt and provider context before reques
 ## Administrator mandate management (issue #9)
 
 See [Admin mandate management](ADMIN_MANDATES.md) for automatic snapshot registration and targeted verification, revocation reconciliation and customer consent requirements.
+
+## Client deletion
+
+Individual and bulk client deletion through FOSSBilling administration schedule removal of the module's mapped Mollie Customers. A pending creation with an unknown Customer ID requires reconciliation before client deletion. A rejected native deletion leaves the Mollie Customer intact. Once the native client is gone, the module verifies each mapping with its original Test or Live credential, profile, Customer ID and mapping metadata. Mollie deletes the Customer and cancels all its mandates and subscriptions, including subscriptions created elsewhere. [Mollie Delete customer](https://docs.mollie.com/reference/delete-customer)
+
+A verified 204 response or a Customer-specific 404 completes cleanup. An unconfirmed outcome is eligible for retry after 15 minutes on native cron. A changed credential, profile or identity requires operator reconciliation. Inspect pending mappings using the module Customer table's status, error and deletion_due_at fields. The module retains payment and mandate history and excludes completed deletions from the customer overview.
