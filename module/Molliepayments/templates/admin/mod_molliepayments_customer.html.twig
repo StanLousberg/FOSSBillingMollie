@@ -1,16 +1,1 @@
-{% extends 'layout_default.html.twig' %}
-{% set active_menu = 'extensions' %}
-{% set result = admin.molliepayments_mandate_list({mapping: mapping_id, environment: 'all', view: 'customers'}) %}
-{% set customer = result.list|first %}
-{% block meta_title %}{{ 'Mollie Customer'|trans }}{% endblock %}
-{% block content %}
-<a class="btn btn-link mb-2" href="{{ 'molliepayments/mandates'|url }}">{{ 'Customers'|trans }}</a>
-{% if customer %}
-<div class="card"><div class="card-header"><h3 class="card-title">{{ customer.first_name }} {{ customer.last_name }}</h3></div>
-<div class="card-body"><a href="{{ ('client/manage/' ~ customer.client_id)|url }}">{{ 'FOSSBilling customer'|trans }} #{{ customer.client_id }}</a>
-<p>{{ customer.customer_id }} · {{ customer.environment|capitalize }} · {{ customer.mapping_status }}</p></div>
-{% for row in result.list %}<div class="border-top p-3">{% if row.mandate_id %}<a href="{{ ('molliepayments/mandates/' ~ mapping_id ~ '/' ~ row.mandate_id)|url }}">{{ row.mandate_id }}</a> · {{ row.summary }}
-{% include 'mod_molliepayments_mandate_status.html.twig' with {status: row.status, revocation: row.revocation, error: row.error, aged: row.aged} only %}
-{% else %}{{ 'No verified mandates'|trans }}{% endif %}</div>{% endfor %}</div>
-{% else %}<p class="alert alert-warning">{{ 'Customer mapping unavailable.'|trans }}</p>{% endif %}
-{% endblock %}
+{% extends 'mod_molliepayments_mandates.html.twig' %}

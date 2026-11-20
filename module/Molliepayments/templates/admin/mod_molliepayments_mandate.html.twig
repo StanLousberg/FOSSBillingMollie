@@ -3,9 +3,9 @@
 {% set mandate = admin.molliepayments_mandate_get({mapping_id: mapping_id, mandate_id: mandate_id}) %}
 {% set can_sync = has_permission('molliepayments', 'sync_mandates') %}
 {% set can_revoke = has_permission('molliepayments', 'revoke_mandates') %}
-{% block meta_title %}{{ 'MolliePayments mandate'|trans }} {{ mandate.mandate_id }}{% endblock %}
+{% block meta_title %}{{ 'MolliePayments mandate details'|trans }} {{ mandate.mandate_id }}{% endblock %}
 {% block breadcrumbs %}
-<ol class="breadcrumb"><li class="breadcrumb-item"><a href="{{ 'molliepayments/mandates'|url }}">{{ 'Mandates'|trans }}</a></li><li class="breadcrumb-item active" aria-current="page">{{ mandate.mandate_id }}</li></ol>
+<ol class="breadcrumb"><li class="breadcrumb-item"><a href="{{ 'molliepayments/mandates'|url }}">{{ 'Customers and mandates'|trans }}</a></li><li class="breadcrumb-item active" aria-current="page">{{ mandate.mandate_id }}</li></ol>
 {% endblock %}
 {% block content %}
 <div class="card mb-3">
@@ -38,9 +38,24 @@
         <p class="mt-3 mb-0" role="status" aria-live="polite" data-mandate-result></p>
     </div>
 </div>
+<div class="card mb-3">
+    <div class="card-header"><h3 class="card-title">{{ 'Orders covered by verified consent'|trans }}</h3></div>
+    <div class="card-body">
+        {% set orders = [] %}
+        {% for reference in mandate.references %}
+            {% for id in reference.applicable_order_ids %}
+                {% if id not in orders %}{% set orders = orders|merge([id]) %}{% endif %}
+            {% endfor %}
+        {% endfor %}
+        {% for id in orders %}
+            <a href="{{ ('order/manage/' ~ id)|url }}">{{ 'Order'|trans }} #{{ id }}</a>{{ not loop.last ? ', ' }}
+        {% else %}{{ 'No currently applicable orders found in the verified references shown.'|trans }}{% endfor %}
+        {% if mandate.more_references %}<p>{{ 'Based on the latest 25 onboarding records.'|trans }}</p>{% endif %}
+    </div>
+</div>
 <div class="card mb-3"><div class="card-header"><h3 class="card-title">{{ 'Verified onboarding references'|trans }}</h3></div><div class="card-body">
     {% for reference in mandate.references %}
-    <p><a href="{{ ('invoice/manage/' ~ reference.invoice_id)|url }}">{{ 'Invoice'|trans }} #{{ reference.invoice_id }}</a> · {{ reference.payment_id }} · {{ 'Attempt'|trans }} {{ reference.id }}<br>Historical consent · Orders {% for id in reference.order_ids %}#{{ id }}{{ not loop.last ? ', ' }}{% endfor %} · Currently applicable orders: {{ reference.applicable_order_ids|join(', ')|default('None') }} · {{ reference.consent_version }} · {{ 'Consent accepted'|trans }} {{ reference.consent_accepted_at }} · {{ 'Mandate verified'|trans }} {{ reference.mandate_verified_at|default('No current successful check recorded'|trans) }}</p>
+    <p><a href="{{ ('invoice/manage/' ~ reference.invoice_id)|url }}">{{ 'Invoice'|trans }} #{{ reference.invoice_id }}</a> · {{ reference.payment_id }} · {{ 'Attempt'|trans }} {{ reference.id }}<br>Historical consent · Orders {% for id in reference.order_ids %}#{{ id }}{{ not loop.last ? ', ' }}{% endfor %} · {{ reference.consent_version }} · {{ 'Consent accepted'|trans }} {{ reference.consent_accepted_at }} · {{ 'Mandate verified'|trans }} {{ reference.mandate_verified_at|default('No current successful check recorded'|trans) }}</p>
     {% else %}<p>{{ 'No verified originating payment association. Discovery does not prove customer authorization and never selects a replacement mandate.'|trans }}</p>{% endfor %}
     {% if mandate.more_references %}<p>Showing the latest 25 onboarding records.</p>{% endif %}
     {% if mandate.unverified_references %}<p class="text-danger">{{ 'Some stored onboarding references could not be verified and are withheld pending reconciliation.'|trans }}</p>{% endif %}

@@ -32,7 +32,7 @@ final class Admin implements InjectionAwareInterface
 
     public function fetchNavigation(): array
     {
-        return ['subpages' => [['location' => 'extensions', 'label' => 'MolliePayments mandates',
+        return ['subpages' => [['location' => 'extensions', 'label' => 'MolliePayments customers and mandates',
             'uri' => $this->di['url']->adminLink('molliepayments/mandates'), 'index' => 700, 'class' => '']]];
     }
 

@@ -4,7 +4,7 @@ Development validation only. Automatic collection remains disabled and `supports
 
 ## Access and workflow
 
-Open **Extensions → MolliePayments mandates**, or **MolliePayments Settings → Manage customers & mandates**. The dedicated route is `/admin/molliepayments/mandates` (subject to the configured admin prefix).
+Open **Extensions → MolliePayments customers and mandates**, or **MolliePayments Settings → Manage customers & mandates**. The dedicated route is `/admin/molliepayments/mandates` (subject to the configured admin prefix).
 
 Staff need module access, `molliepayments.view_mandates` and native `client.view`. Additional permissions are separate:
 
@@ -16,7 +16,7 @@ Staff need module access, `molliepayments.view_mandates` and native `client.view
 
 Native authentication and module permission checks apply server-side. Each write independently requires POST and the native session CSRF nonce, including when the host's general API CSRF setting is disabled. Cookie/session mismatches fail closed. No new session or credential mechanism is introduced.
 
-Customers are sorted by name with the native client ID as a tie-breaker. Expand a customer to see its mandates, or open its mapping for provider context and the native FOSSBilling customer link. **All mandates** and **Needs attention** paginate individual mandates. Search by customer name, ID, email or mandate ID. Filter by method, environment, status or verification outcome.
+Customers are sorted by name with the native client ID as a tie-breaker. Each row shows the customer mappings and their environments. Expand the row to see matching mandates and open a mandate for details. Search by customer name, ID, email or mandate ID. Filter by method, environment, status or verification outcome.
 
 After native settlement, onboarding verifies the explicit mandate relation on the authenticated first Payment. The same Customer lease fences onboarding, targeted refresh and revocation. The existing scoped SDK read establishes merchant-initiated scope only for the returned mandate. The callback and existing pending-mandate recovery path update the local snapshot without an additional Mollie request. An absent relation stays pending under the existing retry policy. No Customer inventory request is required. The former Customer synchronization endpoint is retired. Existing staff assignments to `sync_mandates` now authorize targeted verification.
 

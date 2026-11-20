@@ -8,7 +8,7 @@ function mollieMandateTwig(object $ctx): Twig\Environment
 {
     $loader = new Twig\Loader\ChainLoader([
         new Twig\Loader\FilesystemLoader(dirname(__DIR__, 2) . '/templates/admin'),
-        new Twig\Loader\ArrayLoader(['layout_default.html.twig' => '{% block content %}{% endblock %}{% block js %}{% endblock %}']),
+        new Twig\Loader\ArrayLoader(['layout_default.html.twig' => '{% block top_content %}{% endblock %}{% block content %}{% endblock %}{% block js %}{% endblock %}']),
     ]);
     $twig = new Twig\Environment($loader, ['strict_variables' => true, 'autoescape' => 'html']);
     foreach ([FOSSBilling\Core\Twig\Extension\FOSSBillingExtension::class, FOSSBilling\Core\Twig\Extension\ApiExtension::class] as $class) {
@@ -55,17 +55,22 @@ test('native Twig renders filtered mandate overview details audit and confirmati
         }
     };
     $twig = mollieMandateTwig($ctx);
-    $vars = ['admin' => $proxy, 'request' => [], 'CSRFToken' => 'disposable-admin-nonce', 'mapping_id' => $ctx->mappingId, 'mandate_id' => 'mdt_disposable'];
+    $vars = ['admin' => $proxy, 'request' => [], 'CSRFToken' => 'disposable-admin-nonce'];
     $overview = $twig->render('mod_molliepayments_mandates.html.twig', $vars);
     $dom = new DOMDocument();
     $dom->loadHTML($overview, LIBXML_NOERROR | LIBXML_NOWARNING);
     $xpath = new DOMXPath($dom);
     $group = $xpath->query('//div[@id="customer-' . $ctx->client->getId() . '"]')->item(0);
-    expect($group->textContent)->toContain('mdt_disposable')->not->toContain('mdt_another');
-    $detail = $twig->render('mod_molliepayments_mandate.html.twig', $vars);
+    expect($xpath->query('//section[@aria-label="Overview totals"]//span')->item(1)->textContent)->toBe('2')
+        ->and($xpath->query('.//a[contains(@class, "btn-icon")]', $group)->item(0)->getAttribute('href'))->toEndWith('/' . $ctx->mappingId . '/mdt_disposable');
+    expect($group->textContent)->toContain('mdt_disposable')->not->toContain('mdt_another', 'cst_disposable');
+    expect($xpath->query('//select[@name="method"]/option')->length)->toBe(4)
+        ->and($overview)->toContain('card-subtitle', 'Reset', 'Apply Filters', 'placeholder="mdt_', 'value="directdebit"', 'value="creditcard"', 'value="paypal"')
+        ->not->toContain('Gateway default', 'Customer order', 'All mandates');
+    $detail = $twig->render('mod_molliepayments_mandate.html.twig', $vars + ['mapping_id' => $ctx->mappingId, 'mandate_id' => 'mdt_disposable']);
     expect($overview)->toContain('mdt_disposable', 'cst_disposable', 'name="environment"', 'name="customer"', 'Page', 'valid', '&lt;script&gt;unsafe&lt;/script&gt;')
         ->not->toContain('<script>unsafe</script>');
-    expect($detail)->toContain('Bank account **** 0000', 'No verified originating payment', 'Administrators cannot grant consent', 'Administrative audit history')
+    expect($detail)->toContain('Orders covered by verified consent', 'No currently applicable orders', 'Bank account **** 0000', 'No verified originating payment', 'Administrators cannot grant consent', 'Administrative audit history')
         ->not->toContain('NL00TEST', 'Private Instrument', '<script>unsafe</script>');
     if ($permitted) {
         expect($detail)->toContain('name="CSRFToken"', 'name="confirmation"', 'provider subscriptions', '/api/admin/molliepayments/mandate_revoke', 'aria-live="polite"');

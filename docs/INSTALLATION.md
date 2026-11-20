@@ -147,4 +147,4 @@ Readiness requires the Payment's explicit mandate ID/link; a matching payment in
 
 ## Administrator mandate management
 
-After the additive migration, open **Extensions → MolliePayments mandates**. Grant module access, `molliepayments.view_mandates` and `client.view`; grant `sync_mandates` and `revoke_mandates` separately as needed. No core theme changes or client management endpoints are installed. Read [ADMIN_MANDATES.md](ADMIN_MANDATES.md) before refreshing or revoking a mandate, particularly the uncertain-outcome and customer-consent limitations.
+After the additive migration, open **Extensions → MolliePayments customers and mandates**. Grant module access, `molliepayments.view_mandates` and `client.view`; grant `sync_mandates` and `revoke_mandates` separately as needed. No core theme changes or client management endpoints are installed. Read [ADMIN_MANDATES.md](ADMIN_MANDATES.md) before refreshing or revoking a mandate, particularly the uncertain-outcome and customer-consent limitations.

@@ -113,7 +113,7 @@ final class MandateRepository
             array_push($params, $filters['customer'], '%' . $filters['customer'] . '%', '%' . $filters['customer'] . '%');
         }
         $from = ' FROM molliepayments_customer c LEFT JOIN molliepayments_mandate m ON m.mapping_id = c.id LEFT JOIN client n ON n.id = c.client_id WHERE ' . implode(' AND ', $where);
-        $attention = (int) $this->connection->fetchOne('SELECT COUNT(m.id)' . $from . ' AND ' . $attentionCondition, [...$params, Timestamps::now(-self::SNAPSHOT_MAX_AGE)]);
+        $counts = $this->connection->fetchAssociative("SELECT COUNT(m.id) AS mandates, COUNT(CASE WHEN m.status = 'valid' THEN 1 END) AS valid, COUNT(CASE WHEN " . $attentionCondition . ' THEN m.id END) AS attention' . $from, [Timestamps::now(-self::SNAPSHOT_MAX_AGE), ...$params]);
         $direction = ($filters['sort'] ?? '') === 'name_desc' ? ' DESC' : ' ASC';
         $order = ' ORDER BY LOWER(n.first_name)' . $direction . ', LOWER(n.last_name)' . $direction . ', c.client_id';
         $select = 'SELECT c.id AS mapping_id, c.client_id, c.customer_id, c.gateway_id, c.environment, c.status AS mapping_status, n.first_name, n.last_name, m.mandate_id, m.status, m.method, m.summary, m.verified_at, m.checked_at, m.error, m.revocation';
@@ -127,6 +127,6 @@ final class MandateRepository
             $result['list'] = $this->connection->fetchAllAssociative($select . $from . ' AND c.client_id IN (' . implode(',', $ids) . ')' . $order . ', c.id, m.mandate_id', $params);
         }
 
-        return $result + ['attention' => $attention];
+        return $result + array_map('intval', $counts);
     }
 }

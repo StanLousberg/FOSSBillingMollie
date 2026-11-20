@@ -1,62 +1,91 @@
 {% extends 'layout_default.html.twig' %}
 {% set active_menu = 'extensions' %}
-{% set filters = {view: request.view|default('customers'), customer: request.customer|default(''), mandate: request.mandate|default(''), status: request.status|default(''), environment: request.environment|default(''), method: request.method|default(''), attention: request.attention|default(''), sort: request.sort|default('name_asc')} %}
-{% set result = admin.molliepayments_mandate_list(filters|merge({page: request.page|default(1)})) %}
-{% block meta_title %}{{ 'MolliePayments mandates'|trans }}{% endblock %}
+{% set filters = {customer: request.customer|default(''), mandate: request.mandate|default(''), status: request.status|default(''), environment: request.environment|default(mapping_id is defined ? 'all' : ''), method: request.method|default(''), attention: request.attention|default('')} %}
+{% set result = admin.molliepayments_mandate_list(filters|merge({mapping: mapping_id|default(''), page: request.page|default(1)})) %}
+{% set filters_open = result.environment == 'unconfigured' or filters|filter(value => value != '')|length > 0 %}
+{% block meta_title %}{{ 'MolliePayments customers and mandates'|trans }}{% endblock %}
 {% block breadcrumbs %}
-<ol class="breadcrumb"><li class="breadcrumb-item"><a href="{{ 'extension'|url }}">Extensions</a></li><li class="breadcrumb-item active" aria-current="page">Mandates</li></ol>
+<ol class="breadcrumb"><li class="breadcrumb-item"><a href="{{ 'extension'|url }}">Extensions</a></li><li class="breadcrumb-item active" aria-current="page">Customers and mandates</li></ol>
+{% endblock %}
+{% block top_content %}
+<section class="row row-cards mb-3" aria-label="{{ 'Overview totals'|trans }}">
+    {% for label, card in {'Customers': [result.total, 'blue'], 'Mandates': [result.mandates, 'secondary'], 'Valid mandates': [result.valid, 'success'], 'Mandates needing attention': [result.attention, 'warning']} %}
+        <div class="col-sm-6 col-lg-3">
+            <div class="card card-sm"><div class="card-body"><div class="row align-items-center">
+                <div class="col-auto"><span class="avatar bg-{{ card[1] }} {{ card[1] == 'warning' ? 'text-dark' : 'text-white' }}">{{ card[0] }}</span></div>
+                <div class="col font-weight-medium">{{ label|trans }}</div>
+            </div></div></div>
+        </div>
+    {% endfor %}
+</section>
 {% endblock %}
 {% block content %}
 <div class="card">
-    <div class="card-header"><h3 class="card-title">{{ 'MolliePayments mandates'|trans }}</h3></div>
-    <div class="card-body">
-        <nav class="nav nav-tabs mb-3" aria-label="Mandate views">{% for view, label in {customers: 'Customers', mandates: 'All mandates', attention: 'Needs attention'} %}<a class="nav-link {{ filters.view == view ? 'active' : '' }}" href="{{ 'molliepayments/mandates'|url }}?{{ filters|merge({view: view})|url_encode }}">{{ label|trans }}</a>{% endfor %}</nav>
-
+    <div class="card-header">
+        <div>
+            <h3 class="card-title">{{ 'MolliePayments customers and mandates'|trans }}</h3>
+            <p class="card-subtitle">{{ 'Expand a customer to review their payment mandates and see when each mandate was last verified.'|trans }}</p>
+        </div>
+    </div>
+    <div class="card-body border-bottom py-3 d-flex justify-content-end">
+        <div class="d-inline-flex">
+            <div class="input-group input-group-flat search-input-group">
+                <span class="input-group-text"><button class="search-submit-toggle" form="mandate-filters" type="submit" aria-label="{{ 'Search'|trans }}"><svg class="icon"><use href="#search"/></svg></button></span>
+                <input class="form-control" type="search" form="mandate-filters" id="customer" name="customer" aria-label="{{ 'Customer'|trans }}" placeholder="{{ 'Name, email or ID'|trans }}" value="{{ filters.customer }}" maxlength="128">
+                <span class="input-group-text search-actions">
+                    <button class="search-filter-toggle {{ filters_open ? 'text-primary' : 'text-secondary' }}" type="button" data-bs-toggle="collapse" data-bs-target="#mandate-filter-panel" aria-controls="mandate-filter-panel" aria-expanded="{{ filters_open ? 'true' : 'false' }}" aria-label="{{ 'Search Settings'|trans }}" title="{{ 'Search Settings'|trans }}"><svg class="icon"><use href="#settings"/></svg></button>
+                </span>
+            </div>
+        </div>
+    </div>
+    <div id="mandate-filter-panel" class="card-body px-3 border-bottom collapse{{ filters_open ? ' show' }}">
         {% if result.environment == 'unconfigured' %}<p class="alert alert-warning">No unique enabled gateway. Select an environment to browse historical records.</p>{% endif %}
-        <form method="get" id="mandate-filters" action="{{ 'molliepayments/mandates'|url }}" class="row g-2" aria-label="{{ 'Search and filters'|trans }}">
-            <input type="hidden" name="view" value="{{ filters.view }}">
-            <div class="col-6 col-lg-3"><label class="form-label" for="customer">{{ 'Customer'|trans }}</label><input class="form-control" id="customer" name="customer" placeholder="{{ 'Name, email or ID'|trans }}" value="{{ filters.customer }}" maxlength="128"></div>
-            <div class="col-6 col-lg-3"><label class="form-label" for="mandate">{{ 'Mandate ID'|trans }}</label><input class="form-control" id="mandate" name="mandate" value="{{ filters.mandate }}" maxlength="128"></div>
+        <form method="get" id="mandate-filters" action="{{ 'molliepayments/mandates'|url }}" class="row g-3 bg-body-tertiary rounded p-3 mx-0" aria-label="{{ 'Search and filters'|trans }}">
+            <div class="col-6 col-lg-3"><label class="form-label" for="mandate">{{ 'Mandate ID'|trans }}</label><input class="form-control" id="mandate" name="mandate" placeholder="mdt_38HS4fsS" value="{{ filters.mandate }}" maxlength="128"></div>
             <div class="col-6 col-lg-3"><label class="form-label" for="status">{{ 'Provider status'|trans }}</label><select class="form-select" id="status" name="status">
                 {% for value in ['', 'valid', 'pending', 'invalid', 'missing', 'unknown'] %}<option value="{{ value }}" {{ filters.status == value ? 'selected' : '' }}>{{ value == '' ? 'All'|trans : value }}</option>{% endfor %}
             </select></div>
             <div class="col-6 col-lg-3"><label class="form-label" for="environment">{{ 'Environment'|trans }}</label><select class="form-select" id="environment" name="environment">
-                {% for value in ['', 'test', 'live', 'all'] %}<option value="{{ value }}" {{ result.environment == value ? 'selected' : '' }}>{{ value == '' ? 'Gateway default'|trans : value|capitalize }}</option>{% endfor %}
+                {% if result.environment == 'unconfigured' %}<option value="" selected disabled>{{ 'Select environment'|trans }}</option>{% endif %}
+                {% for value in ['test', 'live', 'all'] %}<option value="{{ value }}" {{ result.environment == value ? 'selected' : '' }}>{{ value|capitalize|trans }}</option>{% endfor %}
             </select></div>
-            <div class="col-6 col-lg-3"><label class="form-label" for="method">{{ 'Payment method'|trans }}</label><input class="form-control" name="method" id="method" value="{{ filters.method }}"></div>
+            <div class="col-6 col-lg-3"><label class="form-label" for="method">{{ 'Payment method'|trans }}</label><select class="form-select" name="method" id="method">
+                {% for value, label in {'': 'All', directdebit: 'Direct debit', creditcard: 'Credit card', paypal: 'PayPal'} %}<option value="{{ value }}" {{ filters.method == value ? 'selected' }}>{{ label|trans }}</option>{% endfor %}
+            </select></div>
             <div class="col-6 col-lg-3"><label class="form-label" for="attention">{{ 'Verification'|trans }}</label><select name="attention" id="attention" class="form-select">{% for value, label in {'': 'All checks', failed: 'Failed check', stale: 'Older than 24 hours', revocation: 'Unresolved revocation', unverified: 'Never verified'} %}<option value="{{ value }}" {{ filters.attention == value ? 'selected' }}>{{ label|trans }}</option>{% endfor %}</select></div>
-            <div class="col-6 col-lg-3"><label class="form-label" for="sort">{{ 'Customer order'|trans }}</label><select id="sort" name="sort" class="form-select">{% for value, label in {name_asc: 'Name A–Z', name_desc: 'Name Z–A'} %}<option value="{{ value }}" {{ filters.sort == value ? 'selected' }}>{{ label|trans }}</option>{% endfor %}</select></div>
-            <div class="col-6 col-lg-3 align-self-end"><button type="submit" class="btn btn-primary">{{ 'Filter'|trans }}</button></div>
+            <div class="col-12 d-flex justify-content-end gap-2 mt-3">
+                <a class="btn btn-outline-secondary" href="{{ 'molliepayments/mandates'|url }}">{{ 'Reset'|trans }}</a>
+                <button type="submit" class="btn btn-primary">
+                    <svg class="icon" aria-hidden="true"><use href="#filter"/></svg>
+                    {{ 'Apply Filters'|trans }}
+                </button>
+            </div>
         </form>
-        <p class="mt-3 mb-0" role="status" aria-live="polite" data-mandate-result></p>
     </div>
-    {% if filters.view == 'customers' %}
     <div class="table-responsive"><table class="table table-vcenter card-table mb-0">
-        <thead><tr><th scope="col">{{ 'Customer'|trans }}</th><th scope="col">{{ 'Status'|trans }}</th><th scope="col" class="text-end">{{ 'Mandates'|trans }}</th></tr></thead>
+        <thead><tr><th scope="col">{{ 'Customer'|trans }}</th><th scope="col">{{ 'Mollie customer'|trans }}</th><th scope="col">{{ 'Environment'|trans }}</th><th scope="col">{{ 'Mapping status'|trans }}</th><th scope="col">{{ 'Mandate status'|trans }}</th><th scope="col" class="text-end">{{ 'Mandates'|trans }}</th></tr></thead>
         <tbody>
         {% for customer, rows in result.groups %}
             {% set count = rows|filter(row => row.mandate_id)|length %}
+            {% set mappings = rows|filter((row, i) => i == 0 or rows[i - 1].mapping_id != row.mapping_id) %}
             <tr>
-                <th scope="row"><a href="{{ ('client/manage/' ~ customer)|url }}">{{ rows[0].first_name }} {{ rows[0].last_name }}</a><div class="small text-muted">#{{ customer }}</div></th>
+                <th scope="row"><a href="{{ ('client/manage/' ~ customer)|url }}">{{ rows[0].first_name }} {{ rows[0].last_name }}</a></th>
+                <td>{% for mapping in mappings %}<div>{{ mapping.customer_id|default('Unavailable'|trans) }}</div>{% endfor %}</td>
+                <td>{% for mapping in mappings %}<div>{{ mapping.environment|capitalize }}</div>{% endfor %}</td>
+                <td>{% for mapping in mappings %}<div>{{ mapping.mapping_status }}</div>{% endfor %}</td>
                 <td>{% if rows|filter(row => row.mandate_id and (row.status != 'valid' or row.error or row.revocation in ['requested', 'rejected']))|length %}
-                    <span class="badge bg-warning-lt">{{ 'Needs attention'|trans }}</span>
-                {% elseif rows|filter(row => row.aged)|length %}<span class="badge bg-secondary-lt">{{ 'Historical'|trans }}</span>
-                {% elseif count %}<span class="badge bg-success-lt">{{ 'Valid'|trans }}</span>
+                    <span class="badge text-bg-warning">{{ 'Needs attention'|trans }}</span>
+                {% elseif rows|filter(row => row.aged)|length %}<span class="badge bg-secondary text-secondary-fg">{{ 'Historical'|trans }}</span>
+                {% elseif count %}<span class="badge bg-green text-green-fg">{{ 'Valid'|trans }}</span>
                 {% else %}<span class="text-muted">{{ 'No mandates'|trans }}</span>{% endif %}</td>
-                <td class="text-end"><button class="btn btn-sm btn-outline-secondary" type="button" data-bs-toggle="collapse" data-bs-target="#customer-{{ customer }}" aria-controls="customer-{{ customer }}" aria-expanded="false" aria-label="{{ 'Show mandates for'|trans }} {{ rows[0].first_name }} {{ rows[0].last_name }}">{{ count }} <span aria-hidden="true">▾</span></button></td>
+                <td class="text-end"><button class="btn btn-sm gap-2" type="button" data-bs-toggle="collapse" data-bs-target="#customer-{{ customer }}" aria-controls="customer-{{ customer }}" aria-expanded="false" aria-label="{{ 'Show mandates for'|trans }} {{ rows[0].first_name }} {{ rows[0].last_name }}">{{ count }} <svg class="icon" aria-hidden="true"><use href="#chevron-down"/></svg></button></td>
             </tr>
-            <tr><td colspan="3" class="p-0 border-0"><div class="collapse" id="customer-{{ customer }}"><div class="p-2 bg-body-tertiary">
-                {% for row in rows %}
-                    {% if loop.first or rows[loop.index0 - 1].mapping_id != row.mapping_id %}
-                        <a class="d-inline-block mx-2 mb-2" href="{{ ('molliepayments/customers/' ~ row.mapping_id)|url }}">{{ row.customer_id }} · {{ row.environment|capitalize }}</a>
-                    {% endif %}
-                {% endfor %}
-                {{ _self.mandates(rows|filter(row => row.mandate_id), false) }}
+            <tr><td colspan="6" class="p-0 border-0"><div class="collapse" id="customer-{{ customer }}"><div class="p-3 bg-body-tertiary">
+                {{ _self.mandates(rows|filter(row => row.mandate_id)) }}
             </div></div></td></tr>
-        {% else %}<tr><td colspan="3" class="text-muted">{{ 'No matching Customer mappings. Listing never creates a customer.'|trans }}</td></tr>{% endfor %}
+        {% else %}<tr><td colspan="6" class="text-muted">{{ 'No matching Customer mappings. Listing never creates a customer.'|trans }}</td></tr>{% endfor %}
         </tbody>
     </table></div>
-    {% else %}{{ _self.mandates(result.list, true) }}{% endif %}
     <div class="card-footer d-flex justify-content-between">
         <span>{% if result.pages %}{{ 'Page'|trans }} {{ result.page }} / {{ result.pages }} · {% endif %}{{ result.total }} {{ 'records'|trans }}</span>
         <div>{% if result.page > 1 %}<a class="btn btn-sm btn-outline-secondary" href="{{ 'molliepayments/mandates'|url }}?{{ filters|merge({page: result.page - 1})|url_encode }}">{{ 'Previous'|trans }}</a>{% endif %}
@@ -64,17 +93,20 @@
     </div>
 </div>
 {% endblock %}
-{% block js %}{{ parent() }}{% include 'mod_molliepayments_mandate_actions.html.twig' %}{% endblock %}
 
-{% macro mandates(rows, show_customer) %}
-<div class="table-responsive"><table class="table table-vcenter mb-0">
-    <thead><tr><th scope="col">{{ 'Mandate'|trans }}</th>{% if show_customer %}<th scope="col">{{ 'Customer'|trans }}</th>{% endif %}<th scope="col">{{ 'Status at last check'|trans }}</th></tr></thead>
+{% macro mandates(rows) %}
+<div class="table-responsive bg-body border rounded"><table class="table table-vcenter table-striped card-table mb-0">
+    <thead><tr><th scope="col">{{ 'Mandate ID'|trans }}</th><th scope="col">{{ 'Payment method'|trans }}</th><th scope="col">{{ 'Instrument'|trans }}</th><th scope="col">{{ 'Environment'|trans }}</th><th scope="col">{{ 'Status at last check'|trans }}</th><th scope="col">{{ 'Last verified'|trans }}</th><th scope="col"><span class="visually-hidden">{{ 'Actions'|trans }}</span></th></tr></thead>
     <tbody>{% for row in rows %}
         <tr>
-            <th scope="row"><a href="{{ ('molliepayments/mandates/' ~ row.mapping_id ~ '/' ~ row.mandate_id)|url }}">{{ row.mandate_id }}</a><div class="small text-muted">{{ row.summary|default(row.method) }} · {{ row.environment|capitalize }}</div></th>
-            {% if show_customer %}<td><a href="{{ ('molliepayments/customers/' ~ row.mapping_id)|url }}">{{ row.first_name }} {{ row.last_name }}</a></td>{% endif %}
+            <th scope="row">{{ row.mandate_id }}</th>
+            <td>{{ {'directdebit': 'Direct debit', 'creditcard': 'Credit card', 'paypal': 'PayPal'}[row.method]|default(row.method|default('Unknown'))|trans }}</td>
+            <td>{{ row.summary|default('—') }}</td>
+            <td>{{ row.environment|capitalize }}</td>
             <td>{% include 'mod_molliepayments_mandate_status.html.twig' with {status: row.status, revocation: row.revocation, error: row.error, aged: row.aged, compact: true} only %}</td>
+            <td>{{ row.verified_at|default('Never'|trans) }}</td>
+            <td class="text-end"><a class="btn btn-icon" href="{{ ('molliepayments/mandates/' ~ row.mapping_id ~ '/' ~ row.mandate_id)|url }}" aria-label="{{ 'View mandate details'|trans }} {{ row.mandate_id }}" title="{{ 'View mandate details'|trans }}"><svg class="icon"><use href="#eye"/></svg></a></td>
         </tr>
-    {% else %}<tr><td colspan="{{ show_customer ? 3 : 2 }}" class="text-muted">{{ 'No matching mandates.'|trans }}</td></tr>{% endfor %}</tbody>
+    {% else %}<tr><td colspan="7" class="text-muted">{{ 'No matching mandates.'|trans }}</td></tr>{% endfor %}</tbody>
 </table></div>
 {% endmacro %}
