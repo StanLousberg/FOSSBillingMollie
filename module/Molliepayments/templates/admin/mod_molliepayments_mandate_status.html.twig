@@ -1,0 +1,6 @@
+{% set colors = {valid: 'bg-green text-green-fg', pending: 'text-bg-warning', invalid: 'bg-red text-red-fg'} %}
+<span class="badge {{ colors[status]|default('bg-secondary text-secondary-fg') }}">{{ status == 'missing' ? 'Missing at last check' : status }}</span>
+{% if revocation %}<div>{{ revocation == 'confirmed' ? 'Provider verified unusable after request'|trans : (revocation == 'rejected' ? 'Mollie rejected the request. Review in the Mollie Dashboard.'|trans : 'Outcome uncertain. Verify with Mollie before further action.'|trans) }}</div>{% endif %}
+{% if error %}<div class="text-danger">{{ 'Last check failed; refresh to verify.'|trans }}</div>{% elseif aged %}<div class="text-muted">Last verified over 24 hours ago. Refresh to verify.</div>{% endif %}
+{% if not compact|default(false) %}{% if status == 'pending' %}<div class="text-muted">Await customer authorization, then verify again.</div>
+{% elseif status in ['missing', 'invalid'] %}<div class="text-muted">Use customer-assisted authorization if a replacement is needed.</div>{% endif %}{% endif %}

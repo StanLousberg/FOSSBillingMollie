@@ -21,14 +21,14 @@ final class AttemptRepository
         $row = $this->connection->fetchAssociative('SELECT * FROM molliepayments_attempt WHERE id = ?', [$id])
             ?: throw new \Payment_Exception('Unknown MolliePayments attempt.', [], 404);
 
-        return $this->normalize($row);
+        return self::normalize($row);
     }
 
     public function active(int $invoiceId): ?array
     {
         $row = $this->connection->fetchAssociative('SELECT * FROM molliepayments_attempt WHERE active_invoice = ?', [$invoiceId]);
 
-        return $row ? $this->normalize($row) : null;
+        return $row ? self::normalize($row) : null;
     }
 
     /** Reservation is committed before making any network request. */
@@ -71,7 +71,7 @@ final class AttemptRepository
         return $this->find($id);
     }
 
-    private function normalize(array $row): array
+    public static function normalize(array $row): array
     {
         // SQLite's NUMERIC affinity returns floats; MySQL/PostgreSQL return decimal strings.
         $row['amount'] = is_float($row['amount']) ? number_format($row['amount'], 2, '.', '') : (string) $row['amount'];

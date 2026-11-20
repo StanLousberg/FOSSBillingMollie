@@ -3,7 +3,7 @@
   "type": "module",
   "id": "molliepayments",
   "name": "MolliePayments",
-  "version": "0.3.0",
+  "version": "0.3.1",
   "description": "Mollie Payments for FOSSBilling",
   "author": {
     "name": "Stan Lousberg",

@@ -235,3 +235,13 @@ Core's `AfterAdminCronRunEvent` performs at most five **settled mandate checks o
 Native `NamedLock` serializes cron batches; existing attempt/Customer leases and conditional writes fence verification. Pending attempts within the seven-day window have a five-minute cooldown, including failed provider reads. At or after seven days from attempt creation, a leased pending record becomes `manual_review`, without provider I/O or financial writes. The transition logs once and is excluded from subsequent batches. An active lease postpones processing until safely available. No new table or column is needed; `updated_at` supplies recovery backoff.
 
 Operators should inspect the original attempt and provider context before requesting another owner verification. A late explicit payment/mandate relation can restore readiness; an absent or contradictory relation requires provider investigation, not an arbitrary mandate assignment. Do not clear active attempts, replay settlement for mandate-only recovery or create a replacement first payment merely to refresh status. See [PR18_FINAL_FIXES.md](PR18_FINAL_FIXES.md) for recovery steps, compatibility limits and validation results. Browser E2E was excluded from this correction round because of the known upstream CSRF issue; no Core/session workaround was added. Automatic recurring collection remains disabled.
+
+## Administrator mandate management (issue #9)
+
+See [Admin mandate management](ADMIN_MANDATES.md) for automatic snapshot registration and targeted verification, revocation reconciliation and customer consent requirements.
+
+## Client deletion
+
+Individual and bulk client deletion through FOSSBilling administration schedule removal of the module's mapped Mollie Customers. A pending creation with an unknown Customer ID requires reconciliation before client deletion. A rejected native deletion leaves the Mollie Customer intact. Once the native client is gone, the module verifies each mapping with its original Test or Live credential, profile, Customer ID and mapping metadata. Mollie deletes the Customer and cancels all its mandates and subscriptions, including subscriptions created elsewhere. [Mollie Delete customer](https://docs.mollie.com/reference/delete-customer)
+
+A verified 204 response or a Customer-specific 404 completes cleanup. An unconfirmed outcome is eligible for retry after 15 minutes on native cron. A changed credential, profile or identity requires operator reconciliation. Inspect pending mappings using the module Customer table's status, error and deletion_due_at fields. The module retains payment and mandate history and excludes completed deletions from the customer overview.

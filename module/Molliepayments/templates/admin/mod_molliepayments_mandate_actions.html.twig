@@ -1,0 +1,37 @@
+<script>
+(() => {
+    const previous = history.state?.mandateAction;
+    if (previous) {
+        const result = document.querySelector('[data-mandate-result]');
+        result.textContent = previous.message;
+        result.classList.add(previous.success ? 'text-success' : 'text-danger');
+        previous.expanded.forEach(id => { const group = document.getElementById(id); if (group) group.open = true; });
+        history.replaceState({...history.state, mandateAction: null}, '');
+    }
+    function redisplay(message, success) {
+        const expanded = Array.from(document.querySelectorAll('details[open]'), group => group.id);
+        history.replaceState({...history.state, mandateAction: {message, success, expanded}}, '');
+        window.location.reload();
+    }
+    let busy = false;
+    document.querySelectorAll('form[data-mandate-action]').forEach(form => {
+        form.addEventListener('submit', event => {
+            event.preventDefault();
+            if (busy) return;
+            busy = true;
+            const buttons = document.querySelectorAll('form[data-mandate-action] button');
+            buttons.forEach(button => button.disabled = true);
+            const result = form.querySelector('[data-action-result]') || document.querySelector('[data-mandate-result]');
+            result.classList.remove('text-danger', 'text-success');
+            result.textContent = {{ 'Verifying with Mollie…'|trans|json_encode|raw }};
+            const data = Object.fromEntries(new FormData(form));
+            FOSSBilling.api.admin.post(form.action, data, outcome => {
+                redisplay(outcome.message, outcome.success);
+            }, error => {
+                const uncertain = ['network_error', 'timeout_error', 'unknown_error'].includes(error.code);
+                redisplay(uncertain ? 'Response unavailable. Verify the mandate before further action.' : error.message, false);
+            });
+        });
+    });
+})();
+</script>

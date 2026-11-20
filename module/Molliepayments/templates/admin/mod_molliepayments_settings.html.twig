@@ -8,6 +8,10 @@
         <h3 class="card-title">{{ 'MolliePayments settings'|trans }}</h3>
     </div>
     <div class="card-body">
+        {% if has_permission('molliepayments', 'view_mandates') and has_permission('client', 'view') %}
+        <p>Review verified mandates and customer authorizations.</p>
+        <p><a class="btn btn-primary" href="{{ 'molliepayments/mandates'|url }}"><svg class="icon" aria-hidden="true"><use href="#credit-card"/></svg>{{ 'Manage customers & mandates'|trans }}</a></p>
+        {% endif %}
         <p>{{ 'Tests the saved API key for the MolliePayments adapter. Its saved Test mode setting determines whether the Test or Live key is used.'|trans }}</p>
         <form id="mollie-connection-test" action="{{ 'molliepayments/connection_test'|api_url }}" method="post">
             <input type="hidden" name="CSRFToken" value="{{ CSRFToken }}">

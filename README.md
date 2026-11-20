@@ -6,7 +6,7 @@
 
 An independent Mollie payment gateway and companion extension for FOSSBilling, using the official Mollie PHP SDK v4. No FOSSBilling core changes are required.
 
-**Development only; not production-ready.** One-time Hosted Checkout, verified webhooks, native invoice settlement, encrypted Test/Live credentials, connection testing and CLI recovery are implemented. Real Test-mode payments and public callbacks have been verified; remaining validation gaps are recorded in [VALIDATION.md](docs/VALIDATION.md). Explicit customer consent, invoice-backed first-payment checkout, mandate verification and read-only onboarding recovery are implemented; see the [client URL and provider limitations](docs/PAYMENTS.md#first-payment-onboarding-issue-8). Internal Customer creation/reuse and CLI Customer recovery remain available; Customer creation, verification, idempotent retry and recovery have been validated against the real Test API using disposable fixtures. Automatic recurring collection, mandate management and refunds are not implemented. `supports_subscriptions` remains false.
+**Development only; not production-ready.** One-time Hosted Checkout, verified webhooks, native invoice settlement, encrypted Test/Live credentials, connection testing and CLI recovery are implemented. Real Test-mode payments and public callbacks have been verified; remaining validation gaps are recorded in [VALIDATION.md](docs/VALIDATION.md). Explicit customer consent, invoice-backed first-payment checkout, mandate verification and read-only onboarding recovery are implemented; see the [client URL and provider limitations](docs/PAYMENTS.md#first-payment-onboarding-issue-8). Internal Customer creation/reuse and CLI Customer recovery remain available; Customer creation, verification, idempotent retry and recovery have been validated against the real Test API using disposable fixtures. Administrator-only mandate overview, automatic post-payment registration and verified revocation are implemented; see [Admin mandate management](docs/ADMIN_MANDATES.md) for permissions, upgrade steps and replacement-authorization limitations. Automatic recurring collection and refunds are not implemented. `supports_subscriptions` remains false.
 
 MolliePayments owns provider communication and payment-attempt idempotency. FOSSBilling owns balances, invoice pricing/tax, accounting and activation. Existing account credit is never reserved or split by this adapter; unsupported partial invoice allocations fail closed.
 
@@ -15,6 +15,8 @@ Normal invoice checkout offers the Bootstrap authorization page to authenticated
 The recurring authorization page names your configured company and lists each recurring product and its current renewal price (after native renewal discounts, excluding tax) separately from the first invoice payment (including tax). Future collections remain disabled; actual renewal invoices determine future amounts.
 
 Gateway payment modes (`both`, `one_time_only`, `recurring_only`) are configured natively. Custom themes can submit explicit consent after native cart checkout and continue straight to Mollie; see the [theme integration contract and example](docs/CUSTOM_CART_CHECKOUT.md). Automatic renewal collection remains disabled.
+
+Deleting a client through FOSSBilling administration also removes the Mollie Customers linked by this module. See [Customer deletion and retries](docs/PAYMENTS.md#client-deletion).
 
 ## Development setup
 

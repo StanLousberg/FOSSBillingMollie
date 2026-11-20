@@ -28,7 +28,12 @@ final class CustomerRepository
     public function reserve(array $record): array
     {
         try {
-            $this->connection->transactional(fn () => $this->connection->insert(self::TABLE, $record));
+            $this->connection->transactional(function () use ($record): void {
+                if (!$this->connection->fetchOne('SELECT id FROM client WHERE id = ?' . \FOSSBilling\Core\Doctrine\RowLock::suffix($this->connection), [$record['client_id']])) {
+                    throw new \Payment_Exception('Customer not found.', [], 404);
+                }
+                $this->connection->insert(self::TABLE, $record);
+            });
         } catch (UniqueConstraintViolationException) {
             // A competing worker owns the same durable creation identity.
         }

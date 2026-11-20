@@ -18,6 +18,11 @@ function mollieGatewayHost(): array
     $di['em']->shouldReceive('flush')->byDefault();
     $di['em']->shouldReceive('getRepository')->with(PayGateway::class)
         ->andReturn(Mockery::mock(Box\Mod\Invoice\Repository\PayGatewayRepository::class))->byDefault();
+    $db = Doctrine\DBAL\DriverManager::getConnection(['driver' => 'pdo_sqlite', 'memory' => true]);
+    $db->executeStatement('CREATE TABLE pay_gateway (id INTEGER PRIMARY KEY)');
+    $di['em']->shouldReceive('getConnection')->andReturn($db);
+    $di['em']->shouldReceive('wrapInTransaction')->andReturnUsing(fn (callable $work) => $db->transactional($work));
+    $di['em']->shouldReceive('refresh')->with(Mockery::type(PayGateway::class), Doctrine\DBAL\LockMode::PESSIMISTIC_WRITE);
     $di['crypt'] = cryptMock();
     $di['loggedin_admin'] = admin(['id' => 7]);
     $service = new ServicePayGateway();

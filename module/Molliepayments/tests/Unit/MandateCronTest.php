@@ -20,6 +20,7 @@ function molliePendingCronContext(): object
 
 test('repeated cron mandate checks never create transactions balance changes or payment events', function (): void {
     $ctx = molliePendingCronContext();
+    expect($ctx->db->fetchOne('SELECT status FROM molliepayments_mandate'))->toBe('pending');
     $before = mollieFinancialSnapshot($ctx);
     $events = 0;
     $ctx->di['event_dispatcher']->addListener(Box\Mod\Invoice\Event\AfterAdminInvoicePaymentReceivedEvent::class, static function () use (&$events): void { ++$events; });
@@ -37,6 +38,7 @@ test('repeated cron mandate checks never create transactions balance changes or 
     expect($ctx->payments->retryPendingMandates())->toBe(1)
         ->and(mollieAttempt($ctx)['onboarding_status'])->toBe('ready')
         ->and(mollieFinancialSnapshot($ctx))->toBe($before)->and($events)->toBe(0)
+        ->and($ctx->db->fetchFirstColumn('SELECT scope FROM molliepayments_mandate'))->toBe(['customer-not-present'])
         ->and($ctx->db->fetchOne('SELECT COUNT(*) FROM molliepayments_customer'))->toBe(1)
         ->and(count(array_filter($ctx->requests, static fn ($r) => $r->getMethod() === 'POST')))->toBe(1);
 });
@@ -138,4 +140,23 @@ test('cron records an explicitly invalid pending mandate without changing the se
         ->and(mollieAttempt($ctx)['mandate_verified_at'])->toBeNull()
         ->and(mollieFinancialSnapshot($ctx))->toBe($before)
         ->and($ctx->payments->retryPendingMandates())->toBe(0);
+});
+
+test('migration imports verified first-payment history only once with its original timestamp', function (): void {
+    $ctx = mollieOnboarding(molliePaymentContext());
+    mollieFirst($ctx);
+    $ctx->status = 'paid';
+    mollieWebhook($ctx);
+    $attempt = mollieAttempt($ctx);
+    expect($attempt['onboarding_status'])->toBe('ready');
+    $before = mollieFinancialSnapshot($ctx);
+    $original = Timestamps::now(-172800);
+    $ctx->db->update('molliepayments_attempt', ['mandate_verified_at' => $original], ['id' => $attempt['id']]);
+    $ctx->db->delete('molliepayments_mandate', ['mandate_id' => $attempt['mandate_id']]);
+    $ctx->services['molliepayments']->update();
+    $ctx->services['molliepayments']->update();
+    expect($ctx->db->fetchFirstColumn('SELECT verified_at FROM molliepayments_mandate'))->toBe([$original])
+        ->and($ctx->db->fetchOne("SELECT COUNT(*) FROM molliepayments_mandate_system_audit WHERE action = 'backfill'"))->toBe(1)
+        ->and(mollieFinancialSnapshot($ctx))->toBe($before)
+        ->and(mollieAttempt($ctx)['consent_scope'])->toBe($attempt['consent_scope']);
 });

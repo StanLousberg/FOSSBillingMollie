@@ -3,7 +3,11 @@
 declare(strict_types=1);
 
 use Box\Mod\Invoice\Entity\Invoice;
+use Box\Mod\Molliepayments\Repository\CustomerRepository;
 use Doctrine\DBAL\Tools\DsnParser;
+use Mollie\Api\Fake\MockResponse;
+use Mollie\Api\Http\Requests\GetMandateRequest;
+use Mollie\Api\Http\Requests\RevokeMandateRequest;
 
 require_once dirname(__DIR__) . '/ClientContext.php';
 require_once dirname(__DIR__) . '/MandateContext.php';
@@ -304,7 +308,7 @@ test('MariaDB customer upgrades preserve mapping and payment records', function 
 
 test('MariaDB customer repeated verification and expired creation recovery never replace identity', function (): void {
     $ctx = mollieCustomers(mollieMariaContext());
-    $ctx->customerResponses[Mollie\Api\Http\Requests\CreateCustomerRequest::class] = new Mollie\Api\Fake\MockResponse([], 500);
+    $ctx->customerResponses[Mollie\Api\Http\Requests\CreateCustomerRequest::class] = new MockResponse([], 500);
     expect(fn () => mollieResolveCustomer($ctx))->toThrow(Payment_Exception::class);
     $row = mollieCustomerRow($ctx);
     $ctx->db->update('molliepayments_customer', ['created_at' => Box\Mod\Molliepayments\Support\Timestamps::now(-2700)], ['id' => $row['id']]);
@@ -657,7 +661,7 @@ test('MariaDB cron retry uses native named locking and preserves readiness durin
     $ctx->mandateStatus = 'valid';
     expect($ctx->payments->retryPendingMandates())->toBe(1);
     $row = mollieAttempt($ctx);
-    $ctx->responses[Mollie\Api\Http\Requests\GetMandateRequest::class] = new Mollie\Api\Fake\MockResponse(['status' => 503, 'title' => 'Unavailable'], 503);
+    $ctx->responses[GetMandateRequest::class] = new MockResponse(['status' => 503, 'title' => 'Unavailable'], 503);
     expect($ctx->payments->reverifyOnboarding($ctx->invoice->getId())['status'])->toBe('ready')
         ->and(mollieAttempt($ctx)['mandate_verified_at'])->toBe($row['mandate_verified_at'])
         ->and((int) $ctx->db->fetchOne("SELECT COUNT(*) FROM client_balance WHERE type = 'transaction'"))->toBe(1);
@@ -815,3 +819,82 @@ test('MariaDB legacy authorization verifies from its stored evidence after order
     expect($page['status'])->toBe('ready')->and($page['authorization_applicable'])->toBeFalse()
         ->and(mollieConsentEvidence($ctx))->toBe($evidence)->and(mollieFinancialSnapshot($ctx))->toBe($financial);
 })->with(['order-collection-v2', 'order-collection-v3']);
+
+require_once dirname(__DIR__) . '/AdminMandateContext.php';
+
+test('MariaDB mandate admin sync refresh revoke and additive update preserve financial history', function (): void {
+    $ctx = mollieOnboarding(mollieMariaContext());
+    mollieFirst($ctx);
+    $ctx->status = 'paid';
+    mollieWebhook($ctx);
+    mollieAdminMandates($ctx, false);
+    $history = mollieMandateHistory($ctx);
+    expect($ctx->adminMandates->synchronize($ctx->mappingId, 7)['success'])->toBeTrue()
+        ->and($ctx->adminMandates->overview(['customer' => (string) $ctx->client->getId(), 'status' => 'valid', 'environment' => 'test'], 1)['total'])->toBe(1)
+        ->and($ctx->adminMandates->detail($ctx->mappingId, 'mdt_disposable')['references'])->toHaveCount(1);
+    $ctx->adminMandate['status'] = 'pending';
+    expect($ctx->adminMandates->refresh($ctx->mappingId, 'mdt_disposable', 7)['success'])->toBeTrue()
+        ->and(mollieAdminMandateRow($ctx)['status'])->toBe('pending');
+    $ctx->adminMandate['status'] = 'valid';
+    expect($ctx->adminMandates->revoke($ctx->mappingId, 'mdt_disposable', 7)['success'])->toBeTrue()
+        ->and($ctx->adminMandates->revoke($ctx->mappingId, 'mdt_disposable', 7)['success'])->toBeTrue()
+        ->and($ctx->deleteCount)->toBe(1)->and(mollieAdminMandateRow($ctx)['revocation'])->toBe('confirmed');
+    $ctx->services['molliepayments']->update();
+    expect(mollieAdminMandateRow($ctx)['status'])->toBe('invalid')->and(mollieMandateHistory($ctx))->toBe($history);
+    $ctx->db->close();
+});
+
+test('MariaDB simultaneous mandate revocations commit one durable request and preserve evidence', function (): void {
+    $ctx = mollieAdminMandates(mollieOnboarding(mollieMariaContext()));
+    $ctx->adminMandates->synchronize($ctx->mappingId, 7);
+    $mapping = $ctx->mappingId;
+    $history = mollieMandateHistory($ctx);
+    $ctx->db->close();
+    $worker = static function (): void {
+        $child = mollieAdminMandates(mollieOnboarding(mollieMariaContext(false)), false);
+        // Both independent provider fakes remain valid. The committed request must prevent a second DELETE.
+        $child->adminResponses[RevokeMandateRequest::class] = static function () use ($child) {
+            expect(mollieAdminMandateRow($child)['revocation'])->toBe('requested');
+            usleep(100000);
+
+            return MockResponse::noContent();
+        };
+        $child->adminMandates->revoke($child->mappingId, 'mdt_disposable', 7);
+        $child->db->close();
+    };
+    mollieMariaWorkers([$worker, $worker]);
+    $check = mollieAdminMandates(mollieOnboarding(mollieMariaContext(false)), false);
+    expect((int) $check->db->fetchOne("SELECT COUNT(*) FROM molliepayments_mandate_audit WHERE mapping_id = ? AND action = 'revoke_requested'", [$mapping]))->toBe(1)
+        ->and(mollieAdminMandateRow($check)['revocation'])->toBe('requested')->and(mollieMandateHistory($check))->toBe($history);
+    $check->adminMandate['status'] = 'invalid';
+    expect($check->adminMandates->refresh($mapping, 'mdt_disposable', 7)['success'])->toBeTrue()
+        ->and(mollieAdminMandateRow($check)['revocation'])->toBe('confirmed');
+    $check->db->close();
+});
+
+test('MariaDB customer lease fences late mandate workers and missing records remain distinct from outages', function (): void {
+    $ctx = mollieAdminMandates(mollieOnboarding(mollieMariaContext()));
+    $ctx->adminMandates->synchronize($ctx->mappingId, 7);
+    $ctx->adminResponses[GetMandateRequest::class] = static function () use ($ctx) {
+        $other = mollieMariaContext(false);
+        $other->db->update(CustomerRepository::TABLE, ['lease' => 'other-worker'], ['id' => $ctx->mappingId]);
+        $other->db->close();
+        $ctx->adminMandate['status'] = 'invalid';
+
+        return MockResponse::ok($ctx->adminMandate);
+    };
+    expect($ctx->adminMandates->refresh($ctx->mappingId, 'mdt_disposable', 7)['success'])->toBeFalse()
+        ->and(mollieAdminMandateRow($ctx)['status'])->toBe('valid');
+    $ctx->db->update(CustomerRepository::TABLE, ['lease' => null, 'lease_until' => null], ['id' => $ctx->mappingId]);
+    $ctx->adminResponses[GetMandateRequest::class] = MockResponse::error(503, 'Outage', 'Private');
+    expect($ctx->adminMandates->refresh($ctx->mappingId, 'mdt_disposable', 7)['success'])->toBeFalse()
+        ->and(mollieAdminMandateRow($ctx)['status'])->toBe('valid')->and(mollieAdminMandateRow($ctx)['error'])->toBe('verification_failed');
+    $ctx->adminResponses[GetMandateRequest::class] = MockResponse::error(404, 'Missing', 'Private');
+    expect($ctx->adminMandates->refresh($ctx->mappingId, 'mdt_disposable', 7)['success'])->toBeTrue()
+        ->and(mollieAdminMandateRow($ctx)['status'])->toBe('missing');
+    $ctx->db->close();
+});
+
+test('MariaDB paginates customers and mandates independently within the gateway environment', function (): void {
+    mollieCheckMandatePages(mollieAdminMandates(mollieOnboarding(mollieMariaContext())));
+});

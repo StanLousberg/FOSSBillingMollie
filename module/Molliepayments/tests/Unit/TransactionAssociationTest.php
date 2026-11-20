@@ -71,9 +71,10 @@ test('orphan association rejects unverified context without linking or settling'
     $ctx->em->flush();
     $before = $tx->getInvoice()?->getId();
     expect(fn () => $ctx->transactionService->preProcessTransaction($tx))->toThrow($case === 'gateway' ? FOSSBilling\Core\Exception\BaseException::class : Payment_Exception::class);
-    $ctx->em->refresh($tx);
-    expect($tx->getInvoice()?->getId())->toBe($before)
-        ->and($ctx->invoice->getStatus())->toBe(Invoice::STATUS_UNPAID)
+    // Core may close the processing EntityManager on rollback. Verify committed state independently.
+    $reader = new Doctrine\ORM\EntityManager($ctx->db, $ctx->em->getConfiguration());
+    expect($reader->find(Transaction::class, $tx->getId())->getInvoice()?->getId())->toBe($before)
+        ->and($reader->find(Invoice::class, $ctx->invoice->getId())->getStatus())->toBe(Invoice::STATUS_UNPAID)
         ->and((int) $ctx->db->fetchOne('SELECT COUNT(*) FROM client_balance'))->toBe(0);
 })->with(['get_invoice', 'get_array', 'payment', 'txn_id', 'conflict', 'gateway', 'other_gateway', 'mode', 'amount', 'metadata', 'customer']);
 

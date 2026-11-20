@@ -72,3 +72,7 @@ Exact order IDs do not exist before native cart checkout. Custom themes therefor
 ## Authorization lifecycle correction
 
 Historical Mollie consent is provider-specific immutable evidence, while native order state determines current per-order applicability. Core's activation/update/cancellation events and `cancel_at_period_end` metadata do not require module event consumers that rewrite consent. Live native entity reads exclude only the affected original IDs; names and renewal prices remain future invoice data. Core's post-activation domain renewal resolver demonstrates why reconstructing acceptance from current prices is incorrect. Financial settlement keeps its native invoice/transaction locks and accounting bridge. No host change, registry, new persistence or recurring scheduler is introduced.
+
+## Administrator mandate management (issue #9)
+
+See [Admin mandate management](ADMIN_MANDATES.md) for post-settlement registration, targeted verification, revocation reconciliation and customer consent requirements.

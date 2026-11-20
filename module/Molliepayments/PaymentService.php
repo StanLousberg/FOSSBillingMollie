@@ -569,6 +569,20 @@ final class PaymentService
     /** Verify an existing successful native settlement, then read the provider; no accounting writes. */
     private function verifySettledMandate(array $attempt, string $lease): void
     {
+        $this->assertSettledTransaction($attempt);
+        [, $environment, $key] = $this->gateway((int) $attempt['gateway_id']);
+        if ($environment !== $attempt['environment'] || !hash_equals($attempt['credential_fingerprint'], hash_hmac('sha256', $attempt['id'], $key))) {
+            throw new \Payment_Exception('Mandate recovery credential context changed.', [], 409);
+        }
+        $payment = $this->fetchPayment($attempt['payment_id'], $key);
+        if ($this->validatePayment($attempt, $payment) !== 'paid') {
+            throw new \Payment_Exception('Mandate recovery requires an authenticated paid payment.', [], 409);
+        }
+        (new MandateService($this->di, $this->clientFactory))->verify($attempt['id'], $payment, $lease);
+    }
+
+    public function assertSettledTransaction(array $attempt): void
+    {
         $transaction = $this->di['em']->find(Transaction::class, (int) $attempt['settled_transaction_id']);
         if ($transaction !== null) {
             $this->di['em']->refresh($transaction);
@@ -589,15 +603,6 @@ final class PaymentService
             || Amount::minor((string) $transaction->getAmount()) !== Amount::minor($attempt['amount'])) {
             throw new \Payment_Exception('Mandate recovery requires the original successful native transaction.', [], 409);
         }
-        [, $environment, $key] = $this->gateway((int) $attempt['gateway_id']);
-        if ($environment !== $attempt['environment'] || !hash_equals($attempt['credential_fingerprint'], hash_hmac('sha256', $attempt['id'], $key))) {
-            throw new \Payment_Exception('Mandate recovery credential context changed.', [], 409);
-        }
-        $payment = $this->fetchPayment($attempt['payment_id'], $key);
-        if ($this->validatePayment($attempt, $payment) !== 'paid') {
-            throw new \Payment_Exception('Mandate recovery requires an authenticated paid payment.', [], 409);
-        }
-        (new MandateService($this->di, $this->clientFactory))->verify($attempt['id'], $payment, $lease);
     }
 
     private function ownedInvoice(int $invoiceId): Invoice
